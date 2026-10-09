@@ -1,0 +1,41 @@
+{
+  "version": "155.0.4283.45",
+  "source": "https://developer.microsoft.com/en-us/microsoft-edge/webview2/",
+  "builds": {
+    "arm64": {
+      "url": "https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/8f5f7422-f729-4414-8772-1c8691dbc9a9/Microsoft.WebView2.FixedVersionRuntime.155.0.4283.45.arm64.cab",
+      "sha256": "09ff642359ad9a9e53ecd268d77c45255b59232478e6da1705b3315b3efa6ae2",
+      "size": 295741850
+    },
+    "amd64": {
+      "url": "https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/01b0fbd9-6ea3-4e12-818a-a71f73f3855b/Microsoft.WebView2.FixedVersionRuntime.155.0.4283.45.x64.cab",
+      "sha256": "ec533bf1b7354d288703cf821a2d640d0130108224f93e330bb9c09faf3f8010",
+      "size": 310544938
+    },
+    "386": {
+      "url": "https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/bdb15e94-cebc-476e-a5d5-ed3cbb4b3d89/Microsoft.WebView2.FixedVersionRuntime.155.0.4283.45.x86.cab",
+      "sha256": "b7b5b023e6ae74403416d8b1340fec63e3ee7903048bce548a8974f2e445a635",
+      "size": 268649207
+    }
+  },
+  "loader": {
+    "version": "1.0.1150.38",
+    "url": "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.1150.38/microsoft.web.webview2.1.0.1150.38.nupkg",
+    "sha256": "921c004bd1764b585496b2eb3eec0a59a9a98e698246f1d9a3f1c08d1d84ebd5",
+    "size": 1736363,
+    "builds": {
+      "arm64": {
+        "path": "build/native/arm64/WebView2Loader.dll",
+        "sha256": "dac2c67e5a21ba0a40a1a3ecdc9b7723708f10f5ecab26f2ddb729c2e27396ca"
+      },
+      "amd64": {
+        "path": "build/native/x64/WebView2Loader.dll",
+        "sha256": "184574b9c36b044888644fc1f2b19176e0e76ccc3ddd2f0a5f0d618c88661f86"
+      },
+      "386": {
+        "path": "build/native/x86/WebView2Loader.dll",
+        "sha256": "d493120afe447e1bfe78b40fd0cee82549009e39f999da2f52b565dcdf69e7d5"
+      }
+    }
+  }
+}

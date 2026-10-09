@@ -1,0 +1,32 @@
+{
+  "tesseract": {
+    "version": "5.5.1",
+    "url": "https://codeload.github.com/tesseract-ocr/tesseract/tar.gz/refs/tags/5.5.1",
+    "filename": "tesseract.tar.gz",
+    "sha256": "a7a3f2a7420cb6a6a94d80c24163e183cf1d2f1bed2df3bbc397c81808a57237"
+  },
+  "leptonica": {
+    "version": "1.85.0",
+    "url": "https://codeload.github.com/DanBloomberg/leptonica/tar.gz/refs/tags/1.85.0",
+    "filename": "leptonica.tar.gz",
+    "sha256": "c01376bce0379d4ea4bc2ec5d5cbddaa49e2f06f88242619ab8c059e21adf233"
+  },
+  "eng": {
+    "version": "e12c65a915945e4c28e237a9b52bc4a8f39a0cec",
+    "url": "https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/e12c65a915945e4c28e237a9b52bc4a8f39a0cec/eng.traineddata",
+    "filename": "eng.traineddata",
+    "sha256": "8280aed0782fe27257a68ea10fe7ef324ca0f8d85bd2fd145d1c2b560bcb66ba"
+  },
+  "fra": {
+    "version": "e12c65a915945e4c28e237a9b52bc4a8f39a0cec",
+    "url": "https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/e12c65a915945e4c28e237a9b52bc4a8f39a0cec/fra.traineddata",
+    "filename": "fra.traineddata",
+    "sha256": "907743d98915c91a3906dfbf6e48b97598346698fe53aaa797e1a064ffcac913"
+  },
+  "models_license": {
+    "version": "e12c65a915945e4c28e237a9b52bc4a8f39a0cec",
+    "url": "https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/e12c65a915945e4c28e237a9b52bc4a8f39a0cec/LICENSE",
+    "filename": "tessdata.LICENSE",
+    "sha256": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9"
+  }
+}

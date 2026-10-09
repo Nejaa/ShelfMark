@@ -1,0 +1,771 @@
+/* Palette and base controls */
+:root {
+    color-scheme: dark;
+    --bg: #101215;
+    --panel: #191c20;
+    --input: #111316;
+    --line: #30353b;
+    --muted: #9ba3ad;
+    --text: #f2f3f4;
+    --accent: #c9f27b;
+    --hover: #24292b;
+    --danger: #ff9e9e;
+    --warning: #ffcd83;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html, body {
+    height: 100%;
+    margin: 0;
+}
+
+body {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.45 system-ui, Segoe UI, sans-serif;
+}
+
+input, button, textarea, select {
+    font: inherit;
+    color: inherit;
+}
+
+input, textarea, select {
+    background: var(--input);
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    padding: 10px 12px;
+}
+
+input[type=checkbox] {
+    padding: 0;
+    accent-color: var(--accent);
+}
+
+textarea {
+    width: 100%;
+    min-height: 100px;
+    resize: vertical;
+}
+
+button {
+    cursor: pointer;
+    border: 0;
+    border-radius: 7px;
+    background: var(--accent);
+    color: #18200f;
+    font-weight: 650;
+    padding: 10px 15px;
+}
+
+button:disabled {
+    opacity: .45;
+    cursor: default;
+}
+
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, a:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+}
+
+.quiet {
+    background: #2a2e33;
+    color: var(--text);
+}
+
+a {
+    color: #9fc5ff;
+}
+
+.hidden {
+    display: none !important;
+}
+
+.muted, .unchanged, .note {
+    color: var(--muted);
+}
+
+.note {
+    font-size: 12px;
+}
+
+.warning {
+    color: var(--warning);
+}
+
+.bad, .old {
+    color: var(--danger);
+}
+
+.new, .status {
+    color: var(--accent);
+}
+
+.status {
+    margin-left: auto;
+}
+
+/* Application shell and library */
+header {
+    flex: none;
+    height: 64px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 28px;
+    border-bottom: 1px solid var(--line);
+}
+
+header b {
+    font-size: 17px;
+    letter-spacing: .012em;
+}
+
+header > span {
+    color: var(--muted);
+}
+
+header nav {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+}
+
+header button[aria-current=page] {
+    box-shadow: inset 0 -2px var(--accent);
+}
+
+.mark {
+    display: grid;
+    place-items: center;
+    flex: none;
+    background: var(--accent);
+    color: #17200e;
+    font-size: 20px;
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    font-weight: 800;
+}
+
+main {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    max-width: 1450px;
+    margin: auto;
+    padding: 26px 28px;
+    display: flex;
+    flex-direction: column;
+}
+
+.scan {
+    flex: none;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    padding: 14px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+}
+
+.scan input {
+    flex: 1;
+    min-width: 180px;
+}
+
+.layout {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(275px, .8fr) minmax(500px, 1.6fr);
+    gap: 18px;
+    margin-top: 18px;
+}
+
+.panel {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.panel > h2 {
+    flex: none;
+    font-size: 14px;
+    margin: 0;
+    padding: 15px 17px;
+    border-bottom: 1px solid var(--line);
+}
+
+.list-filter {
+    flex: none;
+    padding: 10px;
+    border-bottom: 1px solid var(--line);
+}
+
+.list-filter input {
+    width: 100%;
+}
+
+.list {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+}
+
+.book, .match {
+    display: block;
+    width: 100%;
+    text-align: left;
+    color: var(--text);
+    background: transparent;
+    font-weight: normal;
+}
+
+.book {
+    padding: 12px 15px;
+    border-radius: 0;
+    border-bottom: 1px solid var(--line);
+}
+
+.book:hover, .book.selected {
+    background: var(--hover);
+}
+
+.book.selected {
+    box-shadow: inset 3px 0 var(--accent);
+}
+
+.book strong {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.book.staged strong::after {
+    content: ' · Draft';
+    color: var(--accent);
+    font-size: 11px;
+}
+
+.book small {
+    color: var(--muted);
+}
+
+.tree {
+    flex: none;
+    max-height: 180px;
+    overflow: auto;
+    padding: 8px;
+    border-bottom: 1px solid var(--line);
+}
+
+.tree:empty {
+    display: none;
+}
+
+.treeitem, .dir {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    color: var(--text);
+    font-weight: 400;
+}
+
+.treeitem {
+    --depth: 0;
+    padding: 5px 8px 5px calc(8px + var(--depth) * 14px);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.treeitem:hover, .treeitem.current, .dir:hover {
+    background: #292f25;
+    color: var(--accent);
+}
+
+/* Book detail and metadata editor */
+#detail {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+}
+
+.detail {
+    padding: 16px;
+}
+
+.empty {
+    padding: 30px;
+    display: grid;
+    place-items: center;
+    color: var(--muted);
+}
+
+.bookhead, .coverreview {
+    display: flex;
+    gap: 16px;
+}
+
+.cover {
+    width: 116px;
+    height: 164px;
+    flex: none;
+    object-fit: cover;
+    background: #272b30;
+    border-radius: 5px;
+}
+
+.bookinfo {
+    min-width: 0;
+}
+
+.bookinfo h3 {
+    margin: 3px 0 6px;
+    font-size: 19px;
+}
+
+.bookinfo p {
+    color: var(--muted);
+    margin: 4px 0;
+    overflow-wrap: anywhere;
+}
+
+.searchrow, .actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 14px;
+}
+
+.searchrow {
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.searchrow > input {
+    flex: 1 1 200px;
+    min-width: 0;
+}
+
+.searchrow .cache-option {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    color: var(--muted);
+}
+
+.actions {
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.section {
+    margin-top: 20px;
+    overflow-x: auto;
+}
+
+.section h3 {
+    font-size: 13px;
+    margin: 0 0 9px;
+}
+
+.matches {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+    gap: 10px;
+}
+
+.match {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px;
+    min-height: 138px;
+}
+
+.match:hover, .match.chosen {
+    border-color: var(--accent);
+    background: #22271e;
+}
+
+.match img {
+    width: 48px;
+    height: 68px;
+    object-fit: cover;
+    float: left;
+    margin: 0 9px 5px 0;
+    background: #333;
+}
+
+.match strong, .match small {
+    display: block;
+}
+
+.match strong {
+    font-size: 13px;
+    line-height: 1.3;
+}
+
+.match small {
+    color: var(--muted);
+    margin-top: 5px;
+}
+
+.match-results {
+    margin: 12px 0;
+}
+
+.match-results > summary {
+    cursor: pointer;
+    font-weight: 600;
+    padding: 8px 0;
+}
+
+.coverreview {
+    margin: 10px 0;
+}
+
+.coverreview label {
+    display: block;
+    margin-top: 8px;
+}
+
+.proposedcover {
+    display: block;
+}
+
+.compare, .review-meta table {
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.compare th, .compare td, .review-meta th, .review-meta td {
+    text-align: left;
+    padding: 8px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+    overflow-wrap: anywhere;
+}
+
+.compare th {
+    color: var(--muted);
+    font-weight: 500;
+}
+
+.compare th:first-child, .compare td:first-child {
+    width: 8%;
+    text-align: center;
+}
+
+.compare th:nth-child(2) { width: 15%; }
+.compare th:nth-child(3) { width: 25%; }
+.compare th:nth-child(4) { width: 34%; }
+.compare th:nth-child(5) { width: 18%; }
+
+.compare input {
+    width: 100%;
+    min-width: 0;
+}
+
+.compare input[type=checkbox] {
+    width: auto;
+}
+
+#applyAll {
+    display: block;
+    margin: 4px auto 0;
+}
+
+/* Settings */
+.settings-page {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+}
+
+.settings-grid {
+    display: grid;
+    grid-template-columns: 170px minmax(0, 1fr);
+    gap: 24px;
+}
+
+.settings-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    align-self: start;
+    position: sticky;
+    top: 0;
+}
+
+.settings-nav a {
+    color: var(--text);
+    padding: 8px;
+}
+
+.settings-card {
+    max-width: 850px;
+    padding: 20px;
+    margin-bottom: 18px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    scroll-margin-top: 12px;
+}
+
+.settings-card h2 {
+    margin: 0 0 14px;
+}
+
+.settings-card label {
+    display: block;
+    font-weight: 600;
+    margin: 16px 0 7px;
+}
+
+.settings-card label.check {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    font-weight: normal;
+}
+
+.settings-card input:not([type=checkbox]), .settings-card select {
+    width: min(100%, 520px);
+    display: block;
+}
+
+.settings-card .note {
+    margin: 5px 0 10px;
+}
+
+/* A dependency warning remains readable alongside the regular settings notes. */
+.settings-card .ocr-warning {
+    color: var(--danger);
+    border-left: 3px solid var(--danger);
+    padding-left: 10px;
+}
+
+.settings-actions {
+    position: sticky;
+    bottom: 0;
+    background: var(--bg);
+    padding: 14px 0;
+}
+
+/* Folder picker and draft review dialogs */
+.picker {
+    position: fixed;
+    margin: auto;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    width: fit-content;
+    height: fit-content;
+}
+
+.picker::backdrop {
+    background: #0009;
+}
+
+.pickerbox {
+    width: min(650px, 90vw);
+    max-height: 85vh;
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: auto;
+}
+
+.pickerbox h2 {
+    margin: 0;
+}
+
+.pickerbar {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.pickerbar span {
+    overflow-wrap: anywhere;
+    color: var(--muted);
+}
+
+.pickdirs, #saveReviewItems {
+    min-height: 100px;
+    overflow: auto;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 6px;
+}
+
+.pickdirs {
+    max-height: 50vh;
+}
+
+#saveReview .pickerbox {
+    width: min(1050px, 90vw);
+    max-height: 90vh;
+}
+
+.review-book {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    margin: 8px 0;
+    background: var(--input);
+}
+
+.review-book summary {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px;
+    cursor: pointer;
+}
+
+.review-cover {
+    width: 54px;
+    height: 76px;
+    object-fit: cover;
+    flex: none;
+    background: #272b30;
+    border-radius: 4px;
+}
+
+.review-file {
+    display: block;
+    color: var(--muted);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
+.review-title {
+    display: block;
+    font-weight: 700;
+}
+
+.review-headline {
+    min-width: 0;
+    flex: 1;
+}
+
+.review-meta {
+    padding: 0 12px 12px;
+    overflow-x: auto;
+}
+
+.review-meta th:first-child, .review-meta td:first-child {
+    width: 8%;
+    text-align: center;
+}
+
+.review-meta th:nth-child(2) { width: 18%; }
+.review-meta th:nth-child(3), .review-meta th:nth-child(4) { width: 37%; }
+
+.review-book-master, .review-global {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0 10px;
+}
+
+.review-cover-preview {
+    display: block;
+    max-width: 100px;
+    max-height: 140px;
+    object-fit: contain;
+    margin-top: 6px;
+}
+
+.review-footer {
+    flex: none;
+    padding: 12px 0 0;
+}
+
+.review-empty {
+    color: var(--muted);
+    padding: 14px;
+}
+
+/* Compact layouts */
+@media (max-width: 850px) {
+    main {
+        padding: 14px;
+    }
+
+    .layout {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: minmax(180px, 35%) minmax(0, 1fr);
+    }
+
+    .scan input {
+        flex-basis: 100%;
+    }
+
+    .tree {
+        max-height: 75px;
+    }
+}
+
+@media (max-width: 650px) {
+    header {
+        padding: 0 14px;
+    }
+
+    header > span {
+        display: none;
+    }
+
+    .settings-grid {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+
+    .settings-nav {
+        position: static;
+        flex-direction: row;
+        flex-wrap: wrap;
+    }
+
+    .compare {
+        min-width: 650px;
+    }
+
+    .review-meta table {
+        min-width: 550px;
+    }
+}
+
+@media (max-height: 650px) {
+    body {
+        overflow: auto;
+    }
+
+    main {
+        min-height: 650px;
+    }
+}

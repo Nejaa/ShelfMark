@@ -1,0 +1,26 @@
+# Editor files
+.idea/
+*.iml
+
+# Build outputs
+/target/
+/shelfmark
+/shelfmark.exe
+
+# Local databases
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Generated desktop payload
+/internal/desktop/payload.tar.gz
+
+# Python packaging cache
+__pycache__/
+
+# Local application logs
+/shelfmark.log
+
+# Generated OCR payload and installed language models
+/internal/ocrruntime/payload.tar.gz
+/tessdata/

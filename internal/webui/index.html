@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Shelfmark — Ebook Metadata</title>
+    <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<header>
+    <div class="mark">S</div>
+    <b>Shelfmark</b>
+    <span>Book metadata manager</span>
+    <nav aria-label="Main navigation">
+        <button id="libraryButton" class="quiet" aria-current="page">Library</button>
+        <button id="settingsButton" class="quiet">Settings</button>
+    </nav>
+</header>
+<main>
+    <div class="scan">
+        <input aria-label="Library folder on the server" id="root" placeholder="Library folder, e.g. M:\\Ebooks or /mnt/m/Ebooks">
+        <button id="pick">Choose folder…</button>
+        <button id="scan">Scan folder</button>
+        <button id="bulkMatches" class="quiet" disabled>Background matches</button>
+        <button id="cancelMatches" class="quiet" hidden>Stop matching</button>
+        <button id="stagedSaveButton" class="quiet" disabled>Review drafts</button>
+        <span id="scanStatus" role="status" class="note">Books stay on this computer.</span>
+    </div>
+    <div class="layout">
+        <section class="panel">
+            <h2>Library <span id="count" class="muted"></span></h2>
+            <div class="list-filter"><input id="libraryFilter" type="search" aria-label="Filter library" placeholder="Filter by title, author or filename"></div>
+            <div id="folderTree" class="tree"></div>
+            <div id="books" class="list">
+                <div class="empty">Choose a folder to get started.</div>
+            </div>
+        </section>
+        <section class="panel">
+            <h2>Review metadata</h2>
+            <div id="detail" class="empty">Select a book to inspect its current metadata and search for an edition.
+            </div>
+        </section>
+    </div>
+    <dialog id="picker" class="picker" aria-labelledby="pickerTitle">
+        <div class="pickerbox">
+            <h2 id="pickerTitle">Choose a library folder</h2>
+            <p class="note">Folders are on the computer running Shelfmark.</p>
+            <div class="pickerbar">
+                <button id="pickParent" class="quiet">Up</button>
+                <span id="pickPath"></span>
+            </div>
+            <div id="pickDirs" class="pickdirs"></div>
+            <div class="actions">
+                <button id="useFolder">Use this folder</button>
+                <button id="cancelPicker" class="quiet">Cancel</button>
+            </div>
+        </div>
+    </dialog>
+    <section id="settingsPage" class="settings-page hidden" aria-labelledby="settingsTitle">
+        <h1 id="settingsTitle">Settings</h1>
+        <form id="settingsForm">
+            <div class="settings-grid">
+                <nav class="settings-nav" aria-label="Settings categories">
+                    <a href="#librarySettings">Library</a>
+                    <a href="#catalogSettings">Catalogs</a>
+                    <a href="#matchingSettings">Matching</a>
+                    <a href="#loggingSettings">Logging</a>
+                </nav>
+                <div>
+                    <section id="librarySettings" class="settings-card">
+                        <h2>Library</h2>
+                        <label for="last_folder">Last library folder</label>
+                        <input id="last_folder" name="last_folder" type="text">
+                        <p class="note">Used when choosing a folder. Paths refer to the server.</p>
+                        <label class="check"><input name="recursive" type="checkbox"> Scan subfolders</label>
+                        <label class="check"><input name="include_hidden" type="checkbox"> Include hidden files and folders</label>
+                        <p class="note">Scanning preferences take effect on the next scan. Symbolic links are skipped.</p>
+                    </section>
+                    <section id="catalogSettings" class="settings-card">
+                        <h2>Catalogs</h2>
+                        <p class="note">Enabled sources receive search terms and discovered ISBNs.</p>
+                        <label class="check"><input name="google_books" type="checkbox"> Google Books</label>
+                        <label class="check"><input name="open_library" type="checkbox"> Open Library</label>
+                        <label class="check"><input name="internet_archive" type="checkbox"> Internet Archive</label>
+                        <label for="googleBooksKey">Google Books API key</label>
+                        <input id="googleBooksKey" type="password" autocomplete="off" spellcheck="false" placeholder="Leave blank to keep the saved key">
+                        <label class="check"><input id="removeGoogleKey" type="checkbox"> Remove the saved key</label>
+                        <p id="googleKeyStatus" class="note"></p>
+                        <p class="note">The key is stored in the local SQLite database. A key is optional.</p>
+                    </section>
+                    <section id="matchingSettings" class="settings-card">
+                        <h2>Matching</h2>
+                        <label class="check"><input name="inspect_content" type="checkbox"> Inspect local content for ISBNs</label>
+                        <label class="check"><input name="ocr" type="checkbox" aria-describedby="ocrWarning"> Use OCR for text in images</label>
+                        <p id="ocrWarning" class="note ocr-warning" role="status" aria-live="polite" hidden>
+                            OCR is unavailable on this server. Check shelfmark.log for details.
+                        </p>
+                        <p class="note">Content inspection runs locally. OCR requires content inspection and can slow searches.</p>
+                        <label for="max_candidates">Maximum matches per book</label>
+                        <input id="max_candidates" name="max_candidates" type="number" min="1" max="50" required>
+                        <label for="cache_days">Keep catalog results for (days)</label>
+                        <input id="cache_days" name="cache_days" type="number" min="0" max="365" required>
+                        <p class="note">Set to 0 to disable caching. At most 500 search results are stored.</p>
+                        <label for="background_delay_seconds">Pause between background book searches (seconds)</label>
+                        <input id="background_delay_seconds" name="background_delay_seconds" type="number" min="1" max="300" required>
+                        <p class="note">Manual searches take priority. Requests to catalogs are also spaced automatically.</p>
+                    </section>
+                    <section id="loggingSettings" class="settings-card">
+                        <h2>Logging</h2>
+                        <label for="log_level">Minimum log level</label>
+                        <select id="log_level" name="log_level" aria-describedby="logLevelHelp">
+                            <option value="DEBUG">Debug</option>
+                            <option value="INFO">Info</option>
+                            <option value="WARN">Warning</option>
+                            <option value="ERROR">Error</option>
+                        </select>
+                        <p id="logLevelHelp" class="note">Includes the selected level and more severe messages. Debug shows detailed operations. Applies when saved and is remembered across launches.</p>
+                        <p class="note">Logs are written to shelfmark.log beside the executable and to an attached terminal.</p>
+                    </section>
+                    <div class="actions settings-actions">
+                        <button id="saveSettings" type="submit" disabled>Save settings</button>
+                        <span id="settingsStatus" role="status" class="note">Loading settings…</span>
+                    </div>
+                </div>
+            </div>
+        </form>
+    </section>
+</main>
+<dialog id="saveReview" class="picker" aria-labelledby="reviewTitle">
+    <div class="pickerbox">
+        <h2 id="reviewTitle">Review metadata changes</h2>
+        <p class="note">Selected updates replace metadata in the original files. No backup copies are created.</p>
+        <label class="review-global"><input type="checkbox" id="reviewSelectAll" checked> Select all books</label>
+        <div id="saveReviewItems"></div>
+        <div class="actions review-footer">
+            <button id="confirmSaveReview" disabled>Save selected updates</button>
+            <button id="cancelSaveReview" class="quiet">Cancel</button>
+            <span id="saveReviewStatus" class="status" role="status"></span>
+        </div>
+    </div>
+</dialog>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
