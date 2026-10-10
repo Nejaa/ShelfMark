@@ -278,15 +278,20 @@ const {renderCompare, selectedValues, resetEditor} = createEditor({
     onApply: apply,
     onSave: () => openSaveReview()
 });
-const {openSaveReview, refreshStagedSaveButton} = createReview(async savedBooks => {
-    const savedActive = savedBooks.find(book => book.path === active?.path);
-    if (savedActive) {
-        const defaultQuery = queryElement('#query')?.value === active.search_query;
-        Object.assign(active, savedActive);
-        if (defaultQuery) queryElement('#query').value = active.search_query;
-    }
+const {openSaveReview, refreshStagedSaveButton} = createReview(async changedBooks => {
+    const changedActive = changedBooks.find(book => book.path === active?.path);
+    const generation = selectionGeneration;
+    const defaultQuery = changedActive && queryElement('#query')?.value === active.search_query;
+    if (changedActive) Object.assign(active, changedActive);
     await refreshLibrary();
-    if (savedActive) { chosen = -1; renderMatches(); await renderCompare(); }
+    if (changedActive && generation === selectionGeneration) {
+        const refreshedActive = books.find(book => book.id === active?.id);
+        if (refreshedActive) Object.assign(active, refreshedActive);
+        if (defaultQuery && queryElement('#query')) queryElement('#query').value = active.search_query;
+        chosen = -1;
+        renderMatches();
+        await renderCompare();
+    }
 });
 initSettings(settings => {
     if (!queryElement('#root').value) queryElement('#root').value = settings.last_folder;

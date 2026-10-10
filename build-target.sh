@@ -5,7 +5,7 @@ cd "$(dirname "$0")"
 require_command() {
     if ! command -v "$1" >/dev/null; then
         echo "Missing build dependency: $1 (target: $target_os/$target_arch)." >&2
-        echo 'See README.md > Building for platform prerequisites. HTTP-only builds use --headless.' >&2
+        echo 'See BUILD.md for platform prerequisites. HTTP-only builds use --headless.' >&2
         exit 1
     fi
 }
@@ -114,7 +114,7 @@ if [[ "$target_os" == linux ]]; then
     if ! "${PKG_CONFIG:-pkg-config}" --exists gtk+-3.0 webkit2gtk-4.0; then
         echo 'Missing GTK 3 or WebKitGTK 4.0 development metadata.' >&2
         "${PKG_CONFIG:-pkg-config}" --print-errors --exists gtk+-3.0 webkit2gtk-4.0 >&2 || true
-        echo 'Install the Linux desktop build dependencies listed in README.md, or set WEBVIEW_SYSROOT to a complete dependency root.' >&2
+        echo 'Install the Linux desktop build dependencies listed in BUILD.md, or set WEBVIEW_SYSROOT to a complete dependency root.' >&2
         exit 1
     fi
 fi

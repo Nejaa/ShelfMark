@@ -28,6 +28,7 @@ type BookRepository interface {
 	Stage(context.Context, string, string, map[string]any, map[string]any) error
 	State(context.Context, string) (library.State, error)
 	Staged(context.Context) ([]library.State, error)
+	DiscardDrafts(context.Context, []string) error
 	FinishSave(context.Context, string, string, map[string]any, map[string]any) error
 }
 

@@ -114,6 +114,26 @@ func (s *Store) Staged(ctx context.Context) ([]library.State, error) {
 	return out, rows.Err()
 }
 
+// DiscardDrafts clears selected patches atomically, preserving observed metadata.
+// It does not access ebook files, so unavailable books can be discarded too.
+func (s *Store) DiscardDrafts(ctx context.Context, paths []string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, path := range paths {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE book_state SET staged_json = NULL, updated_at = ? WHERE path = ?
+		`, time.Now().Unix(), path); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
 // FinishSave reconciles a successfully written file with any unselected edits.
 func (s *Store) FinishSave(ctx context.Context, path, fingerprint string, fileMetadata, remaining map[string]any) error {
 	return s.persistBook(ctx, path, fingerprint, fileMetadata, remaining)
