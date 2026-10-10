@@ -9,7 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/beevik/etree"
 )
@@ -34,13 +36,7 @@ func readCBZFile(filename string) (map[string]any, error) {
 	defer func() { _ = archive.Close() }()
 	for _, file := range archive.File {
 		if strings.EqualFold(file.Name, "ComicInfo.xml") {
-			r, e := file.Open()
-			if e != nil {
-				return nil, e
-			}
-
-			data, e := io.ReadAll(r)
-			_ = r.Close()
+			data, e := readComicInfo(file)
 			if e != nil {
 				return nil, e
 			}
@@ -73,14 +69,12 @@ func writeCBZFile(ctx context.Context, filename string, fields map[string]any) e
 	var info *etree.Element
 	for _, file := range archive.File {
 		if strings.EqualFold(file.Name, "ComicInfo.xml") {
-			r, e := file.Open()
+			data, e := readComicInfo(file)
 			if e != nil {
 				return e
 			}
-
 			doc := etree.NewDocument()
-			_, e = doc.ReadFrom(r)
-			_ = r.Close()
+			e = doc.ReadFromBytes(data)
 			if e != nil {
 				return e
 			}
@@ -94,40 +88,41 @@ func writeCBZFile(ctx context.Context, filename string, fields map[string]any) e
 		info = etree.NewElement("ComicInfo")
 	}
 
-	// Only selected ComicInfo elements change; preserve other comic attributes.
-	mapping := map[string]string{
-		"title":          "Title",
-		"subtitle":       "Subtitle",
-		"authors":        "Writer",
-		"translators":    "Translator",
-		"series":         "Series",
-		"series_index":   "Number",
-		"publisher":      "Publisher",
-		"pubdate":        "Year",
-		"comments":       "Summary",
-		"languages":      "LanguageISO",
-		"tags":           "Genre",
-		"isbn":           "ISBN",
-		"catalog_url":    "Web",
-		"rating":         "CommunityRating",
-		"rights":         "Rights",
-		"original_title": "OriginalTitle",
-		"edition":        "Format",
-		"collection":     "SeriesGroup",
-		"identifiers":    "Notes",
-	}
-	for key, tag := range mapping {
+	// Preserve the element sequence defined by the ComicInfo v2.0 schema.
+	for _, field := range []struct{ key, tag string }{
+		{"title", "Title"},
+		{"series", "Series"},
+		{"series_index", "Number"},
+		{"comments", "Summary"},
+		{"authors", "Writer"},
+		{"publisher", "Publisher"},
+		{"tags", "Genre"},
+		{"catalog_url", "Web"},
+		{"languages", "LanguageISO"},
+		{"edition", "Format"},
+		{"collection", "SeriesGroup"},
+		{"rating", "CommunityRating"},
+	} {
+		key, tag := field.key, field.tag
 		value, ok := fields[key]
 		if !ok {
 			continue
 		}
 
-		node := info.FindElement("./" + tag)
-		if node == nil {
-			node = info.CreateElement(tag)
+		setComicInfoElement(info, tag, Text(value))
+	}
+	if value, ok := fields["pubdate"]; ok {
+		dateFields, err := comicInfoDateFields(Text(value))
+		if err != nil {
+			return err
 		}
-
-		node.SetText(Text(value))
+		for _, tag := range []string{"Year", "Month", "Day"} {
+			if field, present := dateFields[tag]; present {
+				setComicInfoElement(info, tag, field)
+			} else {
+				removeChildren(info, tag)
+			}
+		}
 	}
 
 	var buf bytes.Buffer
@@ -212,6 +207,25 @@ func writeCBZFile(ctx context.Context, filename string, fields map[string]any) e
 	return replaceFile(tmp, filename)
 }
 
+const maxComicInfoSize = 8 << 20
+
+func readComicInfo(file *zip.File) ([]byte, error) {
+	r, err := file.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = r.Close() }()
+
+	data, err := io.ReadAll(io.LimitReader(r, maxComicInfoSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxComicInfoSize {
+		return nil, fmt.Errorf("ComicInfo.xml exceeds 8 MiB")
+	}
+	return data, nil
+}
+
 func mapComicInfo(meta map[string]any, root *etree.Element) {
 	get := func(tag string) string {
 		e := root.FindElement("./" + tag)
@@ -222,21 +236,17 @@ func mapComicInfo(meta map[string]any, root *etree.Element) {
 	}
 	for _, entry := range [][2]string{
 		{"Title", "title"},
-		{"Subtitle", "subtitle"},
 		{"Series", "series"},
 		{"Number", "series_index"},
-		{"Publisher", "publisher"},
-		{"Year", "pubdate"},
 		{"Summary", "comments"},
-		{"LanguageISO", "language"},
-		{"ISBN", "isbn"},
+		{"Writer", "authors"},
+		{"Publisher", "publisher"},
+		{"Genre", "tags"},
 		{"Web", "catalog_url"},
-		{"CommunityRating", "rating"},
-		{"Rights", "rights"},
-		{"OriginalTitle", "original_title"},
+		{"LanguageISO", "language"},
 		{"Format", "edition"},
 		{"SeriesGroup", "collection"},
-		{"Notes", "identifiers"},
+		{"CommunityRating", "rating"},
 	} {
 		if value := get(entry[0]); value != "" {
 			if entry[1] == "language" {
@@ -245,6 +255,9 @@ func mapComicInfo(meta map[string]any, root *etree.Element) {
 				meta[entry[1]] = value
 			}
 		}
+	}
+	if date := comicInfoDate(root); date != "" {
+		meta["pubdate"] = date
 	}
 	for _, k := range [][2]string{{"Writer", "authors"}, {"Translator", "translators"}, {"Genre", "tags"}} {
 		if v := get(k[0]); v != "" {
@@ -255,6 +268,93 @@ func mapComicInfo(meta map[string]any, root *etree.Element) {
 			meta[k[1]] = parts
 		}
 	}
+}
+
+var comicInfoElementOrder = map[string]int{
+	"Title": 0, "Series": 1, "Number": 2, "Count": 3, "Volume": 4,
+	"AlternateSeries": 5, "AlternateNumber": 6, "AlternateCount": 7,
+	"Summary": 8, "Notes": 9, "Year": 10, "Month": 11, "Day": 12,
+	"Writer": 13, "Penciller": 14, "Inker": 15, "Colorist": 16,
+	"Letterer": 17, "CoverArtist": 18, "Editor": 19, "Publisher": 20,
+	"Imprint": 21, "Genre": 22, "Web": 23, "PageCount": 24,
+	"LanguageISO": 25, "Format": 26, "BlackAndWhite": 27, "Manga": 28,
+	"Characters": 29, "Teams": 30, "Locations": 31, "ScanInformation": 32,
+	"StoryArc": 33, "SeriesGroup": 34, "AgeRating": 35, "Pages": 36,
+	"CommunityRating": 37, "MainCharacterOrTeam": 38, "Review": 39,
+}
+
+func setComicInfoElement(parent *etree.Element, tag, value string) {
+	if node := parent.FindElement("./" + tag); node != nil {
+		node.SetText(value)
+		return
+	}
+	node := etree.NewElement(tag)
+	node.SetText(value)
+	order, known := comicInfoElementOrder[tag]
+	if known {
+		for _, child := range parent.ChildElements() {
+			childOrder, childKnown := comicInfoElementOrder[child.Tag]
+			if childKnown && childOrder > order {
+				parent.InsertChildAt(child.Index(), node)
+				return
+			}
+		}
+	}
+	parent.AddChild(node)
+}
+
+func comicInfoDateFields(value string) (map[string]string, error) {
+	if value == "" {
+		return map[string]string{}, nil
+	}
+	for _, layout := range []string{"2006", "2006-01", "2006-01-02"} {
+		parsed, err := time.Parse(layout, value)
+		if err != nil || parsed.Year() < 1 {
+			continue
+		}
+		fields := map[string]string{"Year": strconv.Itoa(parsed.Year())}
+		if len(value) >= len("2006-01") {
+			fields["Month"] = strconv.Itoa(int(parsed.Month()))
+		}
+		if len(value) == len("2006-01-02") {
+			fields["Day"] = strconv.Itoa(parsed.Day())
+		}
+		return fields, nil
+	}
+	return nil, fmt.Errorf("CBZ publication date must be YYYY, YYYY-MM, or YYYY-MM-DD")
+}
+
+func comicInfoDate(root *etree.Element) string {
+	fieldText := func(name string) string {
+		if element := root.FindElement("./" + name); element != nil {
+			return strings.TrimSpace(element.Text())
+		}
+		return ""
+	}
+	year, err := strconv.Atoi(fieldText("Year"))
+	if err != nil || year < 1 || year > 9999 {
+		return ""
+	}
+	date := strconv.Itoa(year)
+	monthText := fieldText("Month")
+	if monthText == "" {
+		return date
+	}
+	month, err := strconv.Atoi(monthText)
+	if err != nil || month < 1 || month > 12 {
+		return date
+	}
+	date += fmt.Sprintf("-%02d", month)
+	dayText := fieldText("Day")
+	if dayText == "" {
+		return date
+	}
+	day, err := strconv.Atoi(dayText)
+	parsed, parseErr := time.Parse("2006-01-02", fmt.Sprintf("%04d-%02d-%02d", year, month, day))
+	if err != nil || parseErr != nil || parsed.Day() != day {
+		return date
+	}
+	return fmt.Sprintf("%04d-%02d-%02d", year, month, day)
 }
 
 func setElement(parent *etree.Element, tag, value string) {

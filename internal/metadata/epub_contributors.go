@@ -24,6 +24,14 @@ func epubContributorRoles(meta *etree.Element) map[*etree.Element]string {
 		}
 		role := node.SelectAttrValue("role", "")
 		if role == "" {
+			for _, attr := range node.Attr {
+				if attr.Key == "role" && attr.NamespaceURI() == "http://www.idpf.org/2007/opf" {
+					role = attr.Value
+					break
+				}
+			}
+		}
+		if role == "" {
 			role = refined[node.SelectAttrValue("id", "")]
 		}
 		if role == "" && node.Tag == "creator" {

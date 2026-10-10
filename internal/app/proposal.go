@@ -77,7 +77,12 @@ func (s *Server) proposal(w http.ResponseWriter, r *http.Request) {
 		if edited {
 			evidence = "Manual edit"
 		}
-		fields = append(fields, proposalField{Evidence: evidence, ReviewRequired: review, Name: name, Current: library.Text(current[name]), Value: library.Text(proposed[name]),
+		inputValue, err := library.InputText(name, proposed[name])
+		if err != nil {
+			jsonError(w, err)
+			return
+		}
+		fields = append(fields, proposalField{Evidence: evidence, ReviewRequired: review, Name: name, Current: library.Text(current[name]), Value: inputValue,
 			Changed: changed, Supported: supported, Suggested: changed && supported && !review && (edited || library.Text(proposed[name]) != "" || (name == "subtitle" && evidence != ""))})
 	}
 	notes := ""
