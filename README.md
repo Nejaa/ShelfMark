@@ -258,12 +258,15 @@ also disables OCR for searches. OCR is used for opening images in EPUB and CBZ;
 PDF matching reads the text layer and does not OCR scanned PDF pages. Custom
 search terms bypass local content inspection.
 
+Selecting a book displays any matching, unexpired cached results.
+A cache miss does not start a search; use **Find matches** to query the catalogs.
 Cached searches expire after seven days by default; set the duration to zero to
 disable caching. The cache holds at most 500 search entries. **Find matches** retries a
 full search when the cached result is empty. Check **Ignore cache** beside the
 button to force a fresh search even when cached matches exist. Successful fresh
 searches update the cache. Background matching can reuse empty results. Provider
-failures are shown separately from empty results and are not cached. Matching scores are heuristics;
+failures are shown separately from empty results. Failed searches with
+no matches are not cached. Matching scores are heuristics;
 verify the edition before using a record. Open Library results can describe a
 work rather than the specific edition of your file.
 

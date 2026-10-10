@@ -155,6 +155,11 @@ func Reconcile(current map[string]any, candidate Candidate, filename string) Met
 			series, volume, reason = parts.Series, parts.Volume, source+"; edition series label"
 			break
 		}
+		// Edition series fields may contain just the name, with no numbering.
+		// Retain that evidence instead of requiring a complete series/volume pair.
+		if series == "" && strings.TrimSpace(label) != "" {
+			series, reason = strings.TrimSpace(label), source+"; edition series label"
+		}
 	}
 	if series == "" && fileLabel.Series != "" {
 		series, volume, reason = fileLabel.Series, fileLabel.Volume, "Filename series/volume label"
@@ -162,13 +167,20 @@ func Reconcile(current map[string]any, candidate Candidate, filename string) Met
 	if series == "" && localLabel.Series != "" {
 		series, volume, reason = localLabel.Series, localLabel.Volume, "Existing numbered main title"
 	}
+	volumeReason := reason
+	if volume == "" && fileLabel.Volume != "" && library.ClassifyBookLabel(fileLabel.Series, series).Series != "" {
+		volume, volumeReason = fileLabel.Volume, "Filename series/volume label"
+	}
 	seriesConflict := identity.Series != "" && series != "" && library.ClassifyBookLabel(series, identity.Series).Series == ""
 	if identity.Series == "" || seriesConflict {
 		set("series", series, reason, seriesConflict || reason == "Filename series/volume label")
 	}
 	if volume != "" {
 		conflict := identity.SeriesIndex != "" && !sameVolume(identity.SeriesIndex, volume)
-		set("series_index", volume, reason, conflict || seriesConflict || reason == "Filename series/volume label")
+		if fileLabel.Volume != "" && library.ClassifyBookLabel(fileLabel.Series, series).Series != "" && !sameVolume(fileLabel.Volume, volume) {
+			conflict = true
+		}
+		set("series_index", volume, volumeReason, conflict || seriesConflict || volumeReason == "Filename series/volume label")
 	}
 	set("original_title", candidate.OriginalTitle, source, library.Text(current["original_title"]) != "" && textSimilarity(library.Text(current["original_title"]), candidate.OriginalTitle) < .65)
 
