@@ -65,8 +65,25 @@ import json, sys
 from pathlib import Path
 Path(sys.argv[3]).write_text(json.dumps({"Replace": {sys.argv[1]: sys.argv[2]}}))
 PYTHON
+# Collect licenses from the same archives embedded by this build. The overlay
+# keeps simultaneous platform builds independent, including their notices.
+collect_notices() {
+    local notice_args=(--ocr "$ocr_payload" --output "$build_dir/notices.tar.gz")
+    if [[ $# -gt 0 ]]; then notice_args+=(--desktop "$1"); fi
+    python3 tools/notices.py "${notice_args[@]}"
+    cp "$build_dir/notices.tar.gz" "target/shelfmark-${target_os}-${target_arch}-licenses.tar.gz"
+    python3 - "$PWD/internal/notices/payload.tar.gz" "$build_dir/notices.tar.gz" "$build_dir/overlay.json" <<'PYTHON'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[3])
+overlay = json.loads(path.read_text())
+overlay["Replace"][sys.argv[1]] = sys.argv[2]
+path.write_text(json.dumps(overlay))
+PYTHON
+}
 if "$headless"; then
-    CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" go build -overlay "$build_dir/overlay.json" -tags ocr -trimpath -ldflags="$link_flags" -o "$output" ./cmd/shelfmark
+    collect_notices
+    CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" go build -overlay "$build_dir/overlay.json" -tags ocr,notices -trimpath -ldflags="$link_flags" -o "$output" ./cmd/shelfmark
     echo "Built $output (HTTP only, bundled OCR)"
     exit 0
 fi
@@ -127,6 +144,7 @@ contents = json.loads(overlay.read_text())
 contents["Replace"][sys.argv[1]] = sys.argv[2]
 overlay.write_text(json.dumps(contents))
 PYTHON
-CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" go build -overlay "$build_dir/overlay.json" -tags desktop,ocr -trimpath -ldflags="$link_flags" -o "$output" ./cmd/shelfmark
+collect_notices "$payload"
+CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" go build -overlay "$build_dir/overlay.json" -tags desktop,ocr,notices -trimpath -ldflags="$link_flags" -o "$output" ./cmd/shelfmark
 
 echo "Built $output (embedded desktop helper and OCR)"

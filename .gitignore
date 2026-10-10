@@ -4,8 +4,6 @@
 
 # Build outputs
 /target/
-/shelfmark
-/shelfmark.exe
 
 # Local databases
 *.sqlite3
@@ -19,8 +17,12 @@
 __pycache__/
 
 # Local application logs
-/shelfmark.log
+*.log
 
 # Generated OCR payload and installed language models
 /internal/ocrruntime/payload.tar.gz
 /tessdata/
+
+# Generated release notices and local runtime agreement
+/internal/notices/payload.tar.gz
+/webview2-license-acceptance.txt

@@ -87,6 +87,8 @@ func New(db Repository, searcher CatalogSearcher, options ...Option) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /", http.FileServerFS(webui.Files))
+	mux.HandleFunc("GET /api/licenses", s.licenseArchive)
+	mux.HandleFunc("GET /api/webview2-license", s.webviewLicense)
 	mux.HandleFunc("GET /api/settings", s.settings)
 	mux.HandleFunc("POST /api/settings", s.settings)
 	mux.HandleFunc("POST /api/browse", s.browse)

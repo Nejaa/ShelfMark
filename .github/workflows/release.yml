@@ -1,0 +1,139 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag (manual runs create a draft release)
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      DOCKER_BUILD_RECORD_UPLOAD: 'false'
+    steps:
+      - name: Validate version
+        shell: bash
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ || ${#RELEASE_TAG} -gt 128 ]]; then
+            echo 'Expected vMAJOR.MINOR.PATCH[-prerelease]' >&2
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify release tag
+        id: source
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          mkdir release source-export
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Compile and inspect release source
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: checks
+          platforms: linux/amd64
+          cache-from: type=gha,scope=checks
+      - name: Build Linux executable and notices
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: artifacts
+          platforms: linux/amd64
+          build-args: |
+            TARGET_OS=linux
+            BUILD_MODE=desktop
+          outputs: type=local,dest=release
+          cache-from: type=gha,scope=release-linux
+          cache-to: type=gha,scope=release-linux,mode=min
+      - name: Build Windows executable and notices
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: artifacts
+          platforms: linux/amd64
+          build-args: |
+            TARGET_OS=windows
+            BUILD_MODE=desktop
+          outputs: type=local,dest=release
+          cache-from: type=gha,scope=release-windows
+          cache-to: type=gha,scope=release-windows,mode=min
+      - name: Build HTTP container image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: runtime
+          platforms: linux/amd64
+          build-args: |
+            TARGET_OS=linux
+            BUILD_MODE=headless
+            VERSION=${{ env.RELEASE_TAG }}
+            REVISION=${{ steps.source.outputs.revision }}
+          tags: shelfmark:${{ env.RELEASE_TAG }}
+          load: true
+          cache-from: type=gha,scope=release-linux
+      - name: Export corresponding third-party sources
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: source-export
+          platforms: linux/amd64
+          build-args: |
+            TARGET_OS=linux
+            BUILD_MODE=headless
+          outputs: type=local,dest=source-export
+          cache-from: type=gha,scope=release-linux
+      - name: Package image, project source and checksums
+        shell: bash
+        run: |
+          docker image save "shelfmark:$RELEASE_TAG" | gzip > release/shelfmark-docker-linux-amd64.tar.gz
+          git archive --format=tar.gz --output=release/shelfmark-source.tar.gz "$RELEASE_TAG"
+          python3 tools/package_release.py --sources source-export --output release
+      - name: Upload release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          AUTOMATIC_RELEASE: ${{ github.event_name == 'push' }}
+        run: |
+          # Upload to a draft first so incomplete downloads never appear as a
+          # published release. Existing published versions are immutable here.
+          if gh release view "$RELEASE_TAG" --json isDraft >/tmp/release.json 2>/tmp/release-error; then
+            python3 -c 'import json; assert json.load(open("/tmp/release.json"))["isDraft"], "Release already published"'
+          else
+            if ! grep -qi 'release not found\|HTTP 404' /tmp/release-error; then
+              cat /tmp/release-error >&2
+              exit 1
+            fi
+            args=(--verify-tag --draft --generate-notes --title "$RELEASE_TAG")
+            if [[ "$RELEASE_TAG" == *-* ]]; then args+=(--prerelease); fi
+            gh release create "$RELEASE_TAG" "${args[@]}"
+          fi
+          gh release upload "$RELEASE_TAG" release/* --clobber
+          # A retry may produce fewer source parts. Remove obsolete generated
+          # assets from this draft so it never publishes stale accompanying data.
+          gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' > /tmp/release-assets
+          while IFS= read -r asset; do
+            if [[ "$asset" == shelfmark-* && "$asset" != */* && ! -f "release/$asset" ]]; then
+              gh release delete-asset "$RELEASE_TAG" "$asset" --yes
+            fi
+          done < /tmp/release-assets
+          if [[ "$AUTOMATIC_RELEASE" == true ]]; then
+            gh release edit "$RELEASE_TAG" --draft=false
+          fi
