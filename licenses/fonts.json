@@ -1,0 +1,8 @@
+[
+  {
+    "module": "github.com/pdfcpu/pdfcpu",
+    "file": "pkg/pdfcpu/model/resources/Roboto-Regular.ttf",
+    "sha256": "017c0be9aaa6d0359737e1fa762ad304c0e0107927faff5a6c1f415c7f5244ed",
+    "notice": "Roboto-NOTICE.txt"
+  }
+]

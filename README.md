@@ -1,3 +1,5 @@
+[![Build](https://github.com/Nejaa/ShelfMark/actions/workflows/ci.yml/badge.svg)](https://github.com/Nejaa/ShelfMark/actions/workflows/ci.yml)
+
 # Shelfmark
 
 Shelfmark manages metadata for a local ebook collection. Scan a folder, find matching
@@ -10,7 +12,16 @@ It does not require Calibre.
 
 ## Getting started
 
-Install the Go version specified in [go.mod](go.mod), Python 3, and the native
+Download the executable for your system from [GitHub Releases](https://github.com/Nejaa/ShelfMark/releases)
+and put it in a writable folder. On Windows, open `shelfmark-windows-amd64.exe`.
+On Linux:
+
+```sh
+chmod +x shelfmark-linux-amd64
+./shelfmark-linux-amd64
+```
+
+To build from source, install the Go version specified in [go.mod](go.mod), Python 3, and the native
 build dependencies in [Building](#building). Build and run:
 
 ```sh
@@ -98,7 +109,10 @@ local filesystem at startup. Shelfmark grants its AppContainer renderer groups
 read/execute permissions on the extracted runtime, including the permissions
 required on Windows 10 for Fixed Version 120 and later. See
 [Microsoft's distribution guide](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution#the-fixed-version-runtime-distribution-mode).
-An installed WebView2 runtime is not required.
+An installed WebView2 runtime is not required. On first desktop launch, read and
+agree to Microsoft's separate runtime terms in the native confirmation dialog.
+Declining leaves HTTP mode available. The terms are served at
+`/api/webview2-license`; acceptance is recorded beside the executable.
 If a desktop runtime or display cannot initialize, Shelfmark continues over HTTP.
 
 Internet access is needed for enabled catalog searches and downloading remote
@@ -180,8 +194,9 @@ warning when the selected OCR engine is unavailable on the server. Repeated
 availability warnings are limited to once per minute; successful OCR discovery
 is cached for the session. Failed language discovery is retried after a minute, avoiding a failing
 subprocess for every image.
-Log records can contain local file paths. Search terms, API keys, request bodies,
-book text, and OCR output are not logged.
+Log records can contain local file paths. Debug logging also includes search terms
+and candidate titles. API keys, request bodies, book text, and OCR output are not
+logged.
 
 Because the Windows executable uses the GUI subsystem, `cmd.exe` can return to its
 prompt while Shelfmark is running. Use `start /wait "" shelfmark-windows-amd64.exe`
@@ -194,7 +209,101 @@ Earlier versions stored data in the user configuration directory under
 `-data-dir`, or move the database and any SQLite sidecar files beside the executable
 while Shelfmark is stopped.
 
+## Docker
+
+Download `shelfmark-docker-linux-amd64.tar.gz` from a GitHub release, then import
+it into Docker. The image is distributed as a file; no registry account is needed.
+Replace the example version with the release you downloaded:
+
+```sh
+docker load --input shelfmark-docker-linux-amd64.tar.gz
+docker run --rm --name shelfmark \
+  -p 127.0.0.1:8766:8766 \
+  --mount type=volume,source=shelfmark-data,target=/data \
+  --mount type=bind,source=/absolute/path/to/books,target=/books \
+  shelfmark:v0.1.0
+```
+
+Open <http://localhost:8766> and scan `/books`. The container runs the HTTP server
+with bundled OCR and no desktop window. `/data` holds SQLite, logs, and OCR models.
+The books mount needs write access for saving metadata; add `readonly` if you only
+want to scan. The process uses UID/GID `10001:10001`: grant that identity access to
+bind-mounted books and, if using a bind mount for `/data`, write access there.
+A Docker named data volume is initialized with the image's ownership.
+
+On Windows with Docker Desktop's Linux containers, use a Windows source path for
+the books mount. Paths entered in Shelfmark still refer to the container, such as
+`/books`, rather than a host drive letter. The image supports Linux/amd64; other
+architectures need a corresponding build or Docker's platform emulation.
+
+Additional flags can be appended after the image name, for example
+`-log-level debug`. Keep the loopback port mapping unless remote access is intended;
+the application does not provide authentication. Stop it with `docker stop shelfmark`.
+
 ## Building
+
+### Container builds
+
+Install Docker with Buildx, Bash, Python 3, Git, and gzip. The Docker daemon must
+be running. Go, C/C++ compilers and native development packages are installed
+inside the build image; they are not required on the host.
+
+```sh
+./build-container.sh                 # Local dev build
+./build-container.sh v0.1.0           # Versioned image and downloads
+```
+
+Output is under `target/releases/<version>/`: Linux and Windows amd64 executables,
+license archives, the Docker image archive, project source, dependency sources,
+and `SHA256SUMS`. Existing output directories are refused to avoid mixing builds.
+If public image pulls fail with HTTP 401, refresh the Docker credentials used by
+your CLI; these images do not require a registry account.
+
+The first build downloads and compiles native dependencies and collects exact
+source packages; allow several gigabytes of storage. Docker layers cache later
+builds. Source collection needs network access and fails if the exact installed
+package sources are unavailable.
+
+The build host container is Linux/amd64; Windows uses MinGW cross-compilation.
+Container-built Linux desktop and OCR helpers require **glibc 2.36 or newer**,
+based on Debian 12. Plain HTTP service can still start if native helpers cannot
+load, but OCR and the desktop window require that compatibility.
+
+For just the HTTP image without release downloads:
+
+```sh
+docker buildx build --platform linux/amd64 --target runtime \
+  --build-arg TARGET_OS=linux --build-arg BUILD_MODE=headless \
+  --tag shelfmark:dev --load .
+```
+
+### GitHub builds and releases
+
+GitHub Actions compiles and runs Go static analysis on pushes to `develop`/`main`
+and pull requests. The release workflow builds in Docker and publishes Linux and
+Windows amd64 executables, their notices, a downloadable Docker image, project and
+third-party sources, and SHA-256 checksums. It does not push to a container registry.
+
+After committing these workflows, push a version tag to publish a release:
+
+```sh
+git tag -a v0.1.0 -m "Shelfmark 0.1.0"
+git push origin v0.1.0
+```
+
+A tag such as `v0.1.0-rc.1` creates a prerelease. Manual runs of the **Release**
+workflow require an existing tag and create a draft for review. Automatic tag
+runs publish only after all assets and matching sources have uploaded. Published
+versions are not overwritten; use a new tag. An interrupted upload can leave a
+draft, which can be retried. The workflow uses the repository's `GITHUB_TOKEN`
+with release write permission; no additional secrets are required. GitHub Actions
+must be enabled and repository policies must allow the job's write permission.
+
+Large third-party source archives are split into numbered parts. Concatenate them
+in filename order, then extract the reconstructed archive. `SHA256SUMS` covers
+all assets, including individual parts. Keep matching sources and notices with
+the release when redistributing binaries; see [Third-party software](THIRD_PARTY.md).
+
 
 ### Common requirements
 
@@ -336,8 +445,9 @@ cross-compilers on its build machine. `WEBVIEW_SYSROOT` applies only to Linux;
 
 Outputs are named `target/shelfmark-<os>-<arch>` (`.exe` on Windows). Each build
 replaces that target's previous executable. Only the final executable needs to be
-copied to the destination; the helper and runtime archive are temporary build
-artifacts. There is no frontend build step or Node.js dependency.
+copied to the destination for running Shelfmark; license/source distribution
+obligations are described in [THIRD_PARTY.md](THIRD_PARTY.md). The helper and runtime
+archive are temporary build artifacts. There is no frontend build step or Node.js dependency.
 
 Plain `go build ./cmd/shelfmark` also creates an HTTP-only executable. See
 [Desktop runtime packaging](docs/desktop.md) for bundle contents, implementation
@@ -414,3 +524,15 @@ step. Rebuild the executable after changing assets.
 
 See [Architecture](docs/architecture.md) for package responsibilities and
 [UX improvements](docs/ux.md) for proposed extensions.
+
+## License
+
+Shelfmark's own code is licensed under the [MIT License](LICENSE), permitting
+commercial and private use, modification, and redistribution with the copyright
+and license notice retained. Dependencies keep their original terms, including
+the separately licensed Windows WebView2 runtime.
+
+Scripted builds include original notices, available from the **Licenses** link in
+the UI or `/api/licenses`. Releases publish notices and corresponding sources
+alongside their binaries. See [Third-party software](THIRD_PARTY.md) for component
+licenses, native rebuild instructions, and redistribution details.

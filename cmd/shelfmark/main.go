@@ -150,7 +150,10 @@ func run(programDir string) error {
 	}
 
 	if !options.headless && graphical() {
-		windowErr := openDesktop(ctx, url)
+		windowErr := desktopConsent(programDir, url)
+		if windowErr == nil {
+			windowErr = openDesktop(ctx, url)
+		}
 		// A successful call returns only after the user closes the window.
 		if windowErr == nil {
 			stop()
