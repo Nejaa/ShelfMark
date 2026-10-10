@@ -134,6 +134,12 @@ jobs:
               gh release delete-asset "$RELEASE_TAG" "$asset" --yes
             fi
           done < /tmp/release-assets
+          # Keep generated notes and manual edits, then append prominent links
+          # to the three runnable artifacts at the bottom of the description.
+          gh release view "$RELEASE_TAG" --json body --jq '.body // ""' > /tmp/release-body.md
+          python3 tools/release_notes.py --repository "$GH_REPO" --tag "$RELEASE_TAG" \
+            --input /tmp/release-body.md --output /tmp/release-notes.md
+          gh release edit "$RELEASE_TAG" --notes-file /tmp/release-notes.md
           if [[ "$AUTOMATIC_RELEASE" == true ]]; then
             gh release edit "$RELEASE_TAG" --draft=false
           fi

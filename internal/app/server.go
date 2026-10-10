@@ -105,6 +105,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/staged-count", s.stagedCount)
 	mux.HandleFunc("POST /api/staged", s.staged)
 	mux.HandleFunc("POST /api/save", s.save)
+	mux.HandleFunc("POST /api/drafts/discard", s.discardDrafts)
 	return withRequestLogging(withSecurityHeaders(http.MaxBytesHandler(mux, 2<<20)))
 }
 

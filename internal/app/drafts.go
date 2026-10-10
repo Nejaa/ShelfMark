@@ -128,6 +128,7 @@ func (s *Server) staged(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			slog.Warn("draft file unavailable during review", "path", b.Path, "error", err)
 			warnings = append(warnings, fmt.Sprintf("%s: %v", b.Path, err))
+			out = append(out, unavailableDraft(b.Path, b.Metadata, b.Staged, err))
 			continue
 		}
 
@@ -135,6 +136,7 @@ func (s *Server) staged(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			slog.Warn("draft metadata unreadable during review", "path", b.Path, "error", err)
 			warnings = append(warnings, fmt.Sprintf("%s: %v", b.Path, err))
+			out = append(out, unavailableDraft(b.Path, b.Metadata, b.Staged, err))
 			continue
 		}
 
@@ -154,9 +156,8 @@ func (s *Server) staged(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		if len(changed) == 0 {
-			continue
-		}
+		// Keep drafts visible even when their values already match the file.
+		// They can still be explicitly discarded from the review.
 
 		changes := make([]proposalField, 0, len(changed))
 		for _, name := range append(library.FieldNames(), "cover_url") {
@@ -185,6 +186,17 @@ func (s *Server) staged(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonOut(w, map[string]any{"books": out, "warnings": warnings})
+}
+
+// unavailableDraft keeps a broken or missing file visible for draft cleanup.
+// Its stored snapshot is only for display; saving still requires a readable file.
+func unavailableDraft(path string, current, staged map[string]any, err error) map[string]any {
+	return map[string]any{
+		"id": idFor(path), "path": path, "name": filepath.Base(path),
+		"metadata": library.Working(current, staged), "file_metadata": current,
+		"draft_version": draftVersion(staged), "unavailable": err.Error(),
+		"changes": []proposalField{},
+	}
 }
 
 // save preflights the whole selection, then saves books independently.
