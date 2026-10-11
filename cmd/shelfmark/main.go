@@ -108,6 +108,9 @@ func run(programDir string) error {
 	application := app.New(db, searcher, app.WithLogLevel(&logLevel), app.WithContext(ctx))
 	server, serveErr, url := startHTTPServer(ctx, listener, application.Handler(), stop)
 
+	// Graceful shutdown happens below; this guarantees listeners are released if a path ever skips it.
+	defer func() { _ = server.Close() }() // best effort after graceful shutdown
+
 	// OCR is independent of the GUI and must also be available in headless mode.
 	// The server is already listening; a native-engine failure is recoverable.
 	closeOCR, ocrErr := metadata.InitializeOCR(ctx, programDir)

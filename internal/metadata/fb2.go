@@ -155,7 +155,7 @@ func applyFB2TitleInfo(info *etree.Element, fields map[string]any) {
 		removeChildren(info, "annotation")
 		if Text(v) != "" {
 			annotation := info.CreateElement("annotation")
-			for _, line := range strings.Split(Text(v), "\n") {
+			for line := range strings.SplitSeq(Text(v), "\n") {
 				annotation.CreateElement("p").SetText(line)
 			}
 		}

@@ -361,7 +361,7 @@ type diagnosticWriter struct{}
 
 // Write logs each native diagnostic line separately so helper prefixes do not collapse multiple messages.
 func (diagnosticWriter) Write(data []byte) (int, error) {
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
 		if line != "" {
 			slog.Warn("desktop runtime diagnostic", "message", line)
 		}

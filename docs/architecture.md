@@ -6,19 +6,19 @@ cluster coordination or distributed job system.
 
 ## Package responsibilities
 
-| Package | Responsibility |
-| --- | --- |
-| `cmd/shelfmark` | Flags, executable-relative data and logging, console attachment, lifecycle, database and catalog wiring, HTTP listener |
-| `cmd/shelfmark-window` | Native window process and SPA readiness bridge |
-| `internal/ocrruntime` | Private OCR extraction, persistent language-model installation and cleanup |
-| `internal/desktop` | Embedded runtime extraction, relocation, process lifecycle and failure isolation |
-| `internal/app` | HTTP actions, library projections, background jobs, drafts, file and database coordination |
-| `internal/library` | Book state, metadata schema, input parsing, search terms, ordering and draft differences |
-| `internal/settings` | Preference defaults, validation, persistence compatibility |
-| `internal/store` | SQLite connection, schema migrations, books, settings, bounded search cache |
-| `internal/catalog` | Catalog adapters, request pacing, matching, ranking and metadata proposals |
-| `internal/metadata` | Format readers and writers, covers, ISBN extraction, optional local OCR |
-| `internal/webui` | Embedded SPA shell, styles and browser modules |
+| Package                | Responsibility                                                                                                         |
+|------------------------|------------------------------------------------------------------------------------------------------------------------|
+| `cmd/shelfmark`        | Flags, executable-relative data and logging, console attachment, lifecycle, database and catalog wiring, HTTP listener |
+| `cmd/shelfmark-window` | Native window process and SPA readiness bridge                                                                         |
+| `internal/ocrruntime`  | Private OCR extraction, persistent language-model installation and cleanup                                             |
+| `internal/desktop`     | Embedded runtime extraction, relocation, process lifecycle and failure isolation                                       |
+| `internal/app`         | HTTP actions, library projections, background jobs, drafts, file and database coordination                             |
+| `internal/library`     | Book state, metadata schema, input parsing, search terms, ordering and draft differences                               |
+| `internal/settings`    | Preference defaults, validation, persistence compatibility                                                             |
+| `internal/store`       | SQLite connection, schema migrations, books, settings, bounded search cache                                            |
+| `internal/catalog`     | Catalog adapters, request pacing, matching, ranking and metadata proposals                                             |
+| `internal/metadata`    | Format readers and writers, covers, ISBN extraction, optional local OCR                                                |
+| `internal/webui`       | Embedded SPA shell, styles and browser modules                                                                         |
 
 The application consumes persistence and catalog interfaces. The persistence
 implementation does not depend on file parsers. Catalog searches receive explicit

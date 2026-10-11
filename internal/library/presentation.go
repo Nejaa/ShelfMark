@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/csv"
 	"fmt"
+	"maps"
 	"strings"
 )
 
@@ -70,12 +71,8 @@ func SearchQuery(values map[string]any, filename string) string {
 // Working overlays a stored draft without mutating either source map.
 func Working(current, draft map[string]any) map[string]any {
 	result := make(map[string]any, len(current)+len(draft))
-	for key, value := range current {
-		result[key] = value
-	}
-	for key, value := range draft {
-		result[key] = value
-	}
+	maps.Copy(result, current)
+	maps.Copy(result, draft)
 	return result
 }
 

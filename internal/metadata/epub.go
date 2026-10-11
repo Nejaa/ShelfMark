@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"slices"
 	"strings"
 
 	"github.com/beevik/etree"
@@ -163,7 +164,7 @@ func prepareEPUBCover(root, meta *etree.Element, opf, coverType string) (string,
 	items := manifest.FindElements("./item")
 	for _, item := range items {
 		props := strings.Fields(item.SelectAttrValue("properties", ""))
-		if contains(props, "cover-image") || item.SelectAttrValue("id", "") == legacy {
+		if slices.Contains(props, "cover-image") || item.SelectAttrValue("id", "") == legacy {
 			cover = item
 			break
 		}

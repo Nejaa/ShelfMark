@@ -165,7 +165,7 @@ func discoverOCRLanguageLocked(parent context.Context, path string, report bool)
 // English and French data, or an empty string when neither is available.
 func selectOCRLanguage(listing string) string {
 	hasEnglish, hasFrench := false, false
-	for _, language := range strings.Fields(listing) {
+	for language := range strings.FieldsSeq(listing) {
 		hasEnglish = hasEnglish || language == "eng"
 		hasFrench = hasFrench || language == "fra"
 	}

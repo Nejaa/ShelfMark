@@ -120,8 +120,7 @@ func requestFailure(err error) string {
 		return "canceled"
 	}
 
-	var dns *net.DNSError
-	if errors.As(err, &dns) {
+	if _, ok := errors.AsType[*net.DNSError](err); ok {
 		return "DNS resolution failed"
 	}
 
@@ -130,8 +129,7 @@ func requestFailure(err error) string {
 		return "network timeout"
 	}
 
-	var connection *net.OpError
-	if errors.As(err, &connection) {
+	if _, ok := errors.AsType[*net.OpError](err); ok {
 		return "network connection failed"
 	}
 

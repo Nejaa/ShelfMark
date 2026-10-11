@@ -121,7 +121,7 @@ func TestCacheExpirationAndBound(t *testing.T) {
 	if err != nil || ok {
 		t.Fatalf("disabled cache get = (%+v, %t, %v), want miss", got, ok, err)
 	}
-	for i := 0; i < 505; i++ {
+	for i := range 505 {
 		key, value, err := cacheEntry(i)
 		if err != nil {
 			t.Fatal(err)

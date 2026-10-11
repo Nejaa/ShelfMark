@@ -23,17 +23,6 @@ func fallback(value, other string) string {
 	return other
 }
 
-// contains reports whether a small string slice already has a value.
-func contains(values []string, value string) bool {
-	for _, v := range values {
-		if v == value {
-			return true
-		}
-	}
-
-	return false
-}
-
 // urlPath decodes archive href values without failing on already-literal paths.
 func urlPath(value string) string {
 	decoded, err := url.PathUnescape(value)

@@ -172,15 +172,16 @@ func comicInfoElementValues(t *testing.T, filename string) (map[string]string, e
 		return nil, err
 	}
 	defer func() { _ = archive.Close() }()
-	for _, member := range archive.File {
-		if !strings.EqualFold(member.Name, "ComicInfo.xml") {
-			continue
-		}
-		reader, err := member.Open()
-		if err != nil {
-			return nil, err
-		}
-		defer func() { _ = reader.Close() }()
+	member := comicInfoMember(archive)
+	if member == nil {
+		return nil, os.ErrNotExist
+	}
+	reader, err := member.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = reader.Close() }()
+	{
 		values := map[string]string{}
 		decoder := xml.NewDecoder(reader)
 		var current string
@@ -204,7 +205,6 @@ func comicInfoElementValues(t *testing.T, filename string) (map[string]string, e
 			}
 		}
 	}
-	return nil, os.ErrNotExist
 }
 
 func comicInfoElementNames(t *testing.T, filename string) ([]string, error) {
@@ -214,15 +214,16 @@ func comicInfoElementNames(t *testing.T, filename string) ([]string, error) {
 		return nil, err
 	}
 	defer func() { _ = archive.Close() }()
-	for _, member := range archive.File {
-		if !strings.EqualFold(member.Name, "ComicInfo.xml") {
-			continue
-		}
-		reader, err := member.Open()
-		if err != nil {
-			return nil, err
-		}
-		defer func() { _ = reader.Close() }()
+	member := comicInfoMember(archive)
+	if member == nil {
+		return nil, os.ErrNotExist
+	}
+	reader, err := member.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = reader.Close() }()
+	{
 		decoder := xml.NewDecoder(reader)
 		var result []string
 		depth := 0
@@ -245,7 +246,6 @@ func comicInfoElementNames(t *testing.T, filename string) ([]string, error) {
 			}
 		}
 	}
-	return nil, os.ErrNotExist
 }
 
 func comicInfoZipEntry(t *testing.T, data []byte) *zip.File {
@@ -282,4 +282,14 @@ func writeZipFixture(t *testing.T, filename string, members map[string][]byte) {
 	if err := file.Close(); err != nil {
 		t.Fatalf("close ZIP fixture file: %v", err)
 	}
+}
+
+// comicInfoMember returns the ComicInfo.xml archive member, or nil when absent.
+func comicInfoMember(archive *zip.ReadCloser) *zip.File {
+	for _, member := range archive.File {
+		if strings.EqualFold(member.Name, "ComicInfo.xml") {
+			return member
+		}
+	}
+	return nil
 }

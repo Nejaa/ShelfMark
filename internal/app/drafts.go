@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -66,9 +67,7 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for k, v := range in.Metadata {
-		staged[k] = v
-	}
+	maps.Copy(staged, in.Metadata)
 
 	if err = s.db.Stage(r.Context(), path, snapshot.fingerprint, fileMeta, staged); err != nil {
 		jsonError(w, err)
@@ -191,12 +190,8 @@ func (s *Server) unavailableDraftReview(b library.State, message string, err err
 // availableDraftReview rebuilds change details from the latest on-disk metadata.
 func (s *Server) availableDraftReview(b library.State, info os.FileInfo, fileMeta map[string]any) map[string]any {
 	draft := make(map[string]any, len(fileMeta)+len(b.Staged))
-	for key, value := range fileMeta {
-		draft[key] = value
-	}
-	for key, value := range b.Staged {
-		draft[key] = value
-	}
+	maps.Copy(draft, fileMeta)
+	maps.Copy(draft, b.Staged)
 
 	cover, err := metadata.Cover(b.Path)
 	if err != nil {

@@ -14,6 +14,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -59,7 +60,7 @@ func epubCover(files []*zip.File) ([]byte, string) {
 	base := path.Dir(opf)
 	for _, item := range manifest.FindElements("./item") {
 		props := strings.Fields(item.SelectAttrValue("properties", ""))
-		if item.SelectAttrValue("id", "") != coverID && !contains(props, "cover-image") {
+		if item.SelectAttrValue("id", "") != coverID && !slices.Contains(props, "cover-image") {
 			continue
 		}
 
@@ -190,7 +191,7 @@ func epubText(ctx context.Context, filename string, ocr bool) string {
 func collectEPUBCoverBarcodes(root *etree.Element, base string, byName map[string]*zip.File, clues *isbnClues) {
 	for _, item := range root.FindElements("./manifest/item") {
 		props := strings.Fields(item.SelectAttrValue("properties", ""))
-		if !contains(props, "cover-image") {
+		if !slices.Contains(props, "cover-image") {
 			continue
 		}
 

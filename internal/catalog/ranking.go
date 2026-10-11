@@ -320,7 +320,7 @@ func differentNumbers(left, right string) bool {
 	numbers := func(value string) []string {
 		var result []string
 
-		for _, word := range strings.Fields(library.NormalizeSearchText(value)) {
+		for word := range strings.FieldsSeq(library.NormalizeSearchText(value)) {
 			if strings.IndexFunc(word, func(r rune) bool { return !unicode.IsDigit(r) }) < 0 {
 				result = append(result, word)
 			}

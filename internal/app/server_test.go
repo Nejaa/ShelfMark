@@ -7,6 +7,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -128,9 +129,7 @@ func (m *memoryRepository) FinishSave(_ context.Context, path, fingerprint strin
 
 func cloneMap(src map[string]any) map[string]any {
 	out := make(map[string]any, len(src))
-	for key, value := range src {
-		out[key] = value
-	}
+	maps.Copy(out, src)
 	return out
 }
 
