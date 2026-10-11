@@ -184,7 +184,7 @@ PDF matching reads its text layer. Release executables include English and
 French OCR models. Custom search terms bypass local content inspection.
 
 Cached results appear when a book is selected. Use **Find matches** to search
-catalogs, or **Ignore cache** to run a fresh search. Cache duration and size are
+catalogs, or **Ignore cache** to run a fresh search. Cache duration is
 configurable. Catalog results can describe a different edition; Open Library
 results may describe a work rather than a specific edition.
 

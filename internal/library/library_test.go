@@ -60,6 +60,11 @@ func TestFilenameBookLabel(t *testing.T) {
 			want:     BookLabel{Title: "Tehanu", Series: "Earthsea", Volume: "2.5"},
 		},
 		{
+			name:     "release noise does not leave a title separator",
+			filename: "Earthsea - 2 - Tehanu - [retail].epub",
+			want:     BookLabel{Title: "Tehanu", Series: "Earthsea", Volume: "2"},
+		},
+		{
 			name:     "known series marker label",
 			filename: "Earthsea Tome 2 - The Tombs of Atuan.pdf",
 			identity: SearchIdentity{Series: "Earthsea", Authors: []string{"Ursula K. Le Guin"}},

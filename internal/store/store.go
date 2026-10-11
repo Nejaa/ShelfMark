@@ -76,6 +76,7 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// initialize creates or migrates the schema inside one transaction.
 func (s *Store) initialize(ctx context.Context) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -83,6 +84,7 @@ func (s *Store) initialize(ctx context.Context) error {
 	}
 
 	defer func() { _ = tx.Rollback() }()
+
 	var version int
 	if err := tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return fmt.Errorf("read schema version: %w", err)
@@ -96,6 +98,7 @@ func (s *Store) initialize(ctx context.Context) error {
 	if version < schemaVersion {
 		slog.Info("migrating database schema", "from", version, "to", schemaVersion)
 	}
+
 	if version < 1 {
 		if _, err := tx.ExecContext(ctx, `
 			CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);

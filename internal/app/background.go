@@ -11,6 +11,7 @@ import (
 	"shelfmark/internal/settings"
 )
 
+// matchProgress is the background-job status reported to the UI.
 type matchProgress struct {
 	ID        string `json:"id"`
 	Status    string `json:"status"`
@@ -28,6 +29,7 @@ type matchJob struct {
 	done     chan struct{}
 }
 
+// snapshot returns a stable copy of the job state for API responses.
 func (j *matchJob) snapshot() matchProgress {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -37,6 +39,7 @@ func (j *matchJob) snapshot() matchProgress {
 // Close cancels and joins background work before database or OCR cleanup.
 func (s *Server) Close() { s.stopBackground() }
 
+// stopBackground cancels the active job, if any, and waits for it to exit.
 func (s *Server) stopBackground() {
 	s.jobsMu.Lock()
 	defer s.jobsMu.Unlock()
@@ -52,123 +55,172 @@ func (s *Server) stopBackgroundLocked() {
 	}
 }
 
+// startBackground replaces any prior job with a server-owned matching run.
 func (s *Server) startBackground(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Folder string `json:"folder"`
 	}
+
 	if err := decode(r, &in); err != nil {
 		jsonError(w, err)
 		return
 	}
+
 	// Serialize job replacement. The worker never takes jobsMu.
 	s.jobsMu.Lock()
 	defer s.jobsMu.Unlock()
+
 	s.stopBackgroundLocked()
+
 	view, err := s.scannedBooks(r.Context(), in.Folder, "")
 	if err != nil {
 		jsonError(w, err)
 		return
 	}
+
 	s.jobSequence++
 	ctx, cancel := context.WithCancel(s.lifetime)
 	job := &matchJob{progress: matchProgress{ID: fmt.Sprint(s.jobSequence), Status: "running", Total: len(view.Books)}, cancel: cancel, done: make(chan struct{})}
 	s.background = job
+
 	slog.Info("background matching started", "job_id", job.progress.ID, "books", len(view.Books))
 	go s.runBackground(ctx, job, view.Books)
 	jsonOut(w, job.snapshot())
 }
 
+// cancelBackground stops the selected background run if it is still current.
 func (s *Server) cancelBackground(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		ID string `json:"id"`
 	}
+
 	if err := decode(r, &in); err != nil {
 		jsonError(w, err)
 		return
 	}
+
 	s.jobsMu.Lock()
 	defer s.jobsMu.Unlock()
 	if s.background != nil && s.background.snapshot().ID == in.ID {
 		s.background.cancel()
 		<-s.background.done
 	}
+
 	jsonOut(w, s.backgroundSnapshotLocked())
 }
 
+// backgroundSnapshotLocked returns the current job state while jobsMu is held.
 func (s *Server) backgroundSnapshotLocked() matchProgress {
 	if s.background == nil {
 		return matchProgress{Status: "idle"}
 	}
+
 	return s.background.snapshot()
 }
 
+// backgroundStatus reports the currently active background job, if any.
 func (s *Server) backgroundStatus(w http.ResponseWriter, _ *http.Request) {
 	s.jobsMu.Lock()
 	defer s.jobsMu.Unlock()
 	jsonOut(w, s.backgroundSnapshotLocked())
 }
 
+// runBackground processes one book at a time so progress remains ordered and
+// cancellation can stop between books without leaving partial per-book work.
 func (s *Server) runBackground(ctx context.Context, job *matchJob, books []book) {
 	defer close(job.done)
 	defer job.cancel()
 	defer func() {
 		job.mu.Lock()
+
 		if ctx.Err() != nil {
 			job.progress.Status = "canceled"
 		} else if job.progress.Status == "running" {
 			job.progress.Status = "completed"
 		}
+
 		progress := job.progress
 		job.mu.Unlock()
 		slog.Info("background matching stopped", "job_id", progress.ID, "status", progress.Status, "completed", progress.Completed, "failures", progress.Failures)
 	}()
+
 	for i, b := range books {
-		// Manual lookups own scheduling priority even during local OCR, before
-		// requests reach the catalog service's separate network throttle.
-		for s.manualSearches.Load() > 0 {
-			if !waitBackground(ctx, 100*time.Millisecond) {
-				return
-			}
-		}
-		if ctx.Err() != nil {
+		if !s.waitForManualSearches(ctx) {
 			return
 		}
-		result, err := s.findMatches(ctx, b.ID, nil, lookupOptions{Background: true})
-		if ctx.Err() != nil {
+
+		if !s.matchBackgroundBook(ctx, job, b) {
 			return
 		}
-		job.mu.Lock()
-		job.progress.Completed++
-		if err != nil || len(result.Warnings) > 0 {
-			job.progress.Failures++
-		}
-		job.mu.Unlock()
-		if err != nil {
-			slog.Warn("background book lookup failed", "book_id", b.ID, "error", err)
-		}
+
 		if i+1 < len(books) {
-			prefs, err := settings.Load(ctx, s.db)
-			if err != nil {
-				if ctx.Err() != nil {
-					return
-				}
-				slog.Warn("background matching settings unavailable", "error", err)
-				job.mu.Lock()
-				job.progress.Status = "failed"
-				job.progress.Failures++
-				job.mu.Unlock()
-				return
-			}
-			if !waitBackground(ctx, time.Duration(prefs.BackgroundDelay)*time.Second) {
+			if !s.waitForNextBackgroundBook(ctx, job) {
 				return
 			}
 		}
 	}
 }
 
+// waitForManualSearches yields to foreground searches before starting more work.
+func (s *Server) waitForManualSearches(ctx context.Context) bool {
+	// Manual lookups own scheduling priority even during local OCR, before
+	// requests reach the catalog service's separate network throttle.
+	for s.manualSearches.Load() > 0 {
+		if !waitBackground(ctx, 100*time.Millisecond) {
+			return false
+		}
+	}
+
+	return ctx.Err() == nil
+}
+
+// matchBackgroundBook runs one search and records whether it produced warnings.
+func (s *Server) matchBackgroundBook(ctx context.Context, job *matchJob, b book) bool {
+	result, err := s.findMatches(ctx, b.ID, nil, lookupOptions{Background: true})
+	if ctx.Err() != nil {
+		return false
+	}
+
+	job.mu.Lock()
+	job.progress.Completed++
+	if err != nil || len(result.Warnings) > 0 {
+		job.progress.Failures++
+	}
+	job.mu.Unlock()
+
+	if err != nil {
+		slog.Warn("background book lookup failed", "book_id", b.ID, "error", err)
+	}
+
+	return true
+}
+
+// waitForNextBackgroundBook reloads the current pacing preference before sleeping.
+func (s *Server) waitForNextBackgroundBook(ctx context.Context, job *matchJob) bool {
+	prefs, err := settings.Load(ctx, s.db)
+	if err != nil {
+		if ctx.Err() != nil {
+			return false
+		}
+
+		slog.Warn("background matching settings unavailable", "error", err)
+
+		job.mu.Lock()
+		job.progress.Status = "failed"
+		job.progress.Failures++
+		job.mu.Unlock()
+
+		return false
+	}
+
+	return waitBackground(ctx, time.Duration(prefs.BackgroundDelay)*time.Second)
+}
+
+// waitBackground blocks for one pacing interval unless the job is canceled.
 func waitBackground(ctx context.Context, delay time.Duration) bool {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
+
 	select {
 	case <-ctx.Done():
 		return false

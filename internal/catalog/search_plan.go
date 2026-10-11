@@ -27,6 +27,7 @@ type searchQuery struct {
 	Fallback bool
 }
 
+// planSearch widens gradually so exact identifiers run before broader provider queries.
 func planSearch(request SearchRequest) []searchQuery {
 	queries := make([]searchQuery, 0, 8)
 	seen := make(map[string]bool)
@@ -38,6 +39,7 @@ func planSearch(request SearchRequest) []searchQuery {
 		seen[key] = true
 		queries = append(queries, query)
 	}
+
 	// ISBNs are independent queries. Combining an ISBN with a noisy title can
 	// hide an otherwise exact hit. Bound content-derived ISBNs to avoid searching
 	// an entire bibliography found by content inspection.
@@ -48,18 +50,23 @@ func planSearch(request SearchRequest) []searchQuery {
 		add(searchQuery{Kind: "text", Text: strings.TrimSpace(request.Query)})
 		return queries
 	}
+
 	titles := request.Identity.Titles
 	if len(titles) > 3 {
 		titles = titles[:3]
 	}
+
 	author := first(request.Identity.Authors)
+
 	for _, title := range titles {
 		add(searchQuery{Kind: "title-author", Title: title, Author: author})
 	}
+
 	if len(titles) == 0 {
 		add(searchQuery{Kind: "text", Text: request.Query})
 		return queries
 	}
+
 	for _, title := range titles {
 		if author != "" {
 			add(searchQuery{Kind: "title", Title: title, Fallback: true})
@@ -70,6 +77,7 @@ func planSearch(request SearchRequest) []searchQuery {
 	return queries
 }
 
+// queryText falls back to the broadest textual representation of the search intent.
 func queryText(query searchQuery) string {
 	if query.ISBN != "" {
 		return query.ISBN

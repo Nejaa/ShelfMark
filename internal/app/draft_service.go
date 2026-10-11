@@ -40,30 +40,13 @@ func (s *Server) saveDraft(ctx context.Context, path string, fields []string, ex
 		return nil, fmt.Errorf("file or draft changed since review; reopen the review")
 	}
 
-	// Split the reviewed patch: unselected fields remain staged for later.
-	selected := make(map[string]bool, len(fields))
-	for _, field := range fields {
-		selected[field] = true
-	}
-
-	apply, remaining := map[string]any{}, map[string]any{}
-	for key, value := range state.Staged {
-		if selected[key] {
-			apply[key] = value
-		} else {
-			remaining[key] = value
-		}
-	}
+	apply, remaining := splitDraft(state.Staged, fields)
 
 	// Read back what the format writer actually preserved or normalized.
 	if len(apply) > 0 {
 		slog.Debug("writing selected metadata fields", "path", path, "fields", len(apply))
-		if err := metadata.Write(ctx, path, apply); err != nil {
-			return nil, fmt.Errorf("write metadata: %w", err)
-		}
-		current, err = metadata.Read(path)
-		if err != nil {
-			return nil, fmt.Errorf("file was written but could not be read: %w", err)
+		if current, err = writeAndReload(ctx, path, apply); err != nil {
+			return nil, err
 		}
 	}
 
@@ -73,6 +56,7 @@ func (s *Server) saveDraft(ctx context.Context, path string, fields []string, ex
 	}
 
 	remaining = library.Changes(current, remaining)
+
 	// Complete bookkeeping even if the browser disconnects after replacement.
 	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
@@ -81,14 +65,41 @@ func (s *Server) saveDraft(ctx context.Context, path string, fields []string, ex
 	}
 
 	slog.Info("book metadata saved", "path", path, "written_fields", len(apply), "remaining_fields", len(remaining))
-	working := make(map[string]any, len(current)+len(remaining))
-	for key, value := range current {
-		working[key] = value
-	}
-
-	for key, value := range remaining {
-		working[key] = value
-	}
+	working := library.Working(current, remaining)
 
 	return map[string]any{"path": path, "metadata": working, "file_metadata": current, "staged": len(remaining) > 0, "search_query": library.SearchQuery(working, filepath.Base(path))}, nil
+}
+
+// splitDraft separates the reviewed patch: selected fields are written now and
+// the unselected ones remain staged for later.
+func splitDraft(staged map[string]any, fields []string) (apply, remaining map[string]any) {
+	selected := make(map[string]bool, len(fields))
+	for _, field := range fields {
+		selected[field] = true
+	}
+
+	apply, remaining = map[string]any{}, map[string]any{}
+	for key, value := range staged {
+		if selected[key] {
+			apply[key] = value
+		} else {
+			remaining[key] = value
+		}
+	}
+
+	return apply, remaining
+}
+
+// writeAndReload writes fields to the file and returns the metadata read back.
+func writeAndReload(ctx context.Context, path string, fields map[string]any) (map[string]any, error) {
+	if err := metadata.Write(ctx, path, fields); err != nil {
+		return nil, fmt.Errorf("write metadata: %w", err)
+	}
+
+	current, err := metadata.Read(path)
+	if err != nil {
+		return nil, fmt.Errorf("file was written but could not be read: %w", err)
+	}
+
+	return current, nil
 }

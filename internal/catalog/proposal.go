@@ -26,6 +26,9 @@ type MetadataProposal struct {
 	Review   map[string]bool
 }
 
+// filenameSeriesEvidence marks filename-derived series clues so the UI can flag them for review.
+const filenameSeriesEvidence = "Filename series/volume label"
+
 // Proposal uses the same reconciliation as the editor when staging selected data.
 func Proposal(current map[string]any, candidate Candidate, filename string) map[string]any {
 	return Reconcile(current, candidate, filename).Values
@@ -35,20 +38,40 @@ func Proposal(current map[string]any, candidate Candidate, filename string) map[
 // metadata when the catalog provides a series label, a different language or a
 // work-level record whose edition fields cannot be tied to this file.
 func Reconcile(current map[string]any, candidate Candidate, filename string) MetadataProposal {
+	proposal := newProposalContext(current, candidate, filename)
+	proposal.applyProviderFields()
+	proposal.applyContributors()
+	promotedSubtitle := proposal.applyTitle()
+	proposal.applySeries()
+	proposal.applyCorroboratedEvidence(promotedSubtitle)
+	proposal.appendWorkRecordNotes()
+	return proposal.result
+}
+
+// proposalContext keeps local, filename, and remote interpretations aligned while reconciling.
+type proposalContext struct {
+	current          map[string]any
+	candidate        Candidate
+	result           MetadataProposal
+	source           string
+	identity         library.SearchIdentity
+	fileLabel        library.BookLabel
+	knownSeries      string
+	localLabel       library.BookLabel
+	remoteLabel      library.BookLabel
+	localTitle       string
+	localSubtitle    string
+	remoteTitle      string
+	localGeneric     bool
+	languageConflict bool
+}
+
+// newProposalContext precomputes the local and remote title/series interpretations used by Reconcile.
+func newProposalContext(current map[string]any, candidate Candidate, filename string) *proposalContext {
 	candidate = normalizeContributors(candidate)
-	result := MetadataProposal{Values: library.Working(current, nil), Evidence: make(map[string]string), Review: make(map[string]bool)}
-	set := func(name string, value any, reason string, review bool) {
-		if library.Text(value) == "" {
-			return
-		}
-		result.Values[name], result.Evidence[name], result.Review[name] = value, reason, review
-	}
-	source := candidate.Source
-	if source == "" {
-		source = "Catalog record"
-	}
-	identity := library.IdentifySearch(current, filepath.Base(filename))
-	fileLabel := library.FilenameBookLabel(filepath.Base(filename), identity)
+	file := filepath.Base(filename)
+	identity := library.IdentifySearch(current, file)
+	fileLabel := library.FilenameBookLabel(file, identity)
 	knownSeries := identity.Series
 	if knownSeries == "" {
 		knownSeries = fileLabel.Series
@@ -60,207 +83,309 @@ func Reconcile(current map[string]any, candidate Candidate, filename string) Met
 			remoteLabel = fromFilename
 		}
 	}
-	localTitle := strings.TrimSpace(localLabel.Title)
-	localSubtitle := strings.TrimSpace(library.Text(current["subtitle"]))
 	classificationIdentity := identity
 	classificationIdentity.Series = knownSeries
 	if remoteLabel.Series != "" {
 		classificationIdentity.Series = remoteLabel.Series
 	}
-	remoteTitle := specificCandidateTitle(classificationIdentity, candidate)
-	localGeneric := localTitle == "" || placeholderTitle(localTitle)
-	languageConflict := differentLanguage(identity.Languages, candidate.Language)
 
-	// Start with provider values, then apply field-specific consistency rules.
+	source := candidate.Source
+	if source == "" {
+		source = "Catalog record"
+	}
+
+	localTitle := strings.TrimSpace(localLabel.Title)
+
+	return &proposalContext{
+		current: current, candidate: candidate, source: source,
+		result:   MetadataProposal{Values: library.Working(current, nil), Evidence: make(map[string]string), Review: make(map[string]bool)},
+		identity: identity, fileLabel: fileLabel, knownSeries: knownSeries,
+		localLabel: localLabel, remoteLabel: remoteLabel,
+		localTitle: localTitle, localSubtitle: strings.TrimSpace(library.Text(current["subtitle"])),
+		remoteTitle:      specificCandidateTitle(classificationIdentity, candidate),
+		localGeneric:     localTitle == "" || placeholderTitle(localTitle),
+		languageConflict: differentLanguage(identity.Languages, candidate.Language),
+	}
+}
+
+// set writes a proposed field only when the candidate value is non-empty text.
+func (p *proposalContext) set(name string, value any, reason string, review bool) {
+	if library.Text(value) == "" {
+		return
+	}
+
+	p.result.Values[name], p.result.Evidence[name], p.result.Review[name] = value, reason, review
+}
+
+// applyProviderFields copies edition-safe scalar fields and preserves risky local edition data.
+func (p *proposalContext) applyProviderFields() {
 	for name, value := range map[string]any{
-		"publisher": candidate.Publisher, "pubdate": candidate.Pubdate,
-		"isbn": candidate.ISBN, "tags": candidate.Categories, "comments": candidate.Description,
-		"identifiers": candidate.Identifiers, "catalog_url": candidate.CatalogURL,
+		"publisher": p.candidate.Publisher, "pubdate": p.candidate.Pubdate,
+		"isbn": p.candidate.ISBN, "tags": p.candidate.Categories, "comments": p.candidate.Description,
+		"identifiers": p.candidate.Identifiers, "catalog_url": p.candidate.CatalogURL,
 	} {
-		local := library.Text(current[name])
+		local := library.Text(p.current[name])
 		editionField := name == "publisher" || name == "pubdate" || name == "isbn"
-		if editionField && (candidate.WorkRecord || languageConflict) && local != "" {
-			result.Evidence[name] = "Existing edition value preserved; catalog record does not identify this edition reliably"
+		if editionField && (p.candidate.WorkRecord || p.languageConflict) && local != "" {
+			p.result.Evidence[name] = "Existing edition value preserved; catalog record does not identify this edition reliably"
 			continue
 		}
-		review := editionField && (candidate.WorkRecord || languageConflict)
-		set(name, value, source, review)
-	}
-	if candidate.CatalogURL == "" {
-		set("catalog_url", candidate.URL, source, false)
-	}
-	if len(identity.Languages) == 0 {
-		set("languages", nonemptyList(languageKey(candidate.Language)), source, candidate.WorkRecord)
-	} else if languageConflict {
-		result.Evidence["languages"] = "Existing book language preserved; selected record describes another language"
+
+		p.set(name, value, p.source, editionField && (p.candidate.WorkRecord || p.languageConflict))
 	}
 
-	// Contributor labels and known translator names are treated as role evidence.
-	// Never guess that an unfamiliar person's name is an author or translator.
+	if p.candidate.CatalogURL == "" {
+		p.set("catalog_url", p.candidate.URL, p.source, false)
+	}
+
+	if len(p.identity.Languages) == 0 {
+		p.set("languages", nonemptyList(languageKey(p.candidate.Language)), p.source, p.candidate.WorkRecord)
+	} else if p.languageConflict {
+		p.result.Evidence["languages"] = "Existing book language preserved; selected record describes another language"
+	}
+}
+
+// applyContributors merges explicit translator roles without discarding local translator data.
+func (p *proposalContext) applyContributors() {
 	var authors []string
-	translators := slices.Clone(candidate.Translators)
-	for _, author := range candidate.Authors {
-		isTranslator := slices.ContainsFunc(library.Strings(current["translators"]), func(name string) bool { return authorSimilarity(name, author) >= .9 })
-		if isTranslator {
+	translators := slices.Clone(p.candidate.Translators)
+	currentTranslators := library.Strings(p.current["translators"])
+
+	for _, author := range p.candidate.Authors {
+		if isKnownTranslator(author, currentTranslators) {
 			translators = append(translators, author)
-		} else {
-			authors = append(authors, author)
+			continue
 		}
+
+		authors = append(authors, author)
 	}
-	set("authors", authors, source, len(identity.Authors) > 0 && !sameContributors(identity.Authors, authors))
+
+	p.set("authors", authors, p.source, len(p.identity.Authors) > 0 && !sameContributors(p.identity.Authors, authors))
+
 	if len(translators) > 0 {
-		translators = uniqueContributors(append(slices.Clone(library.Strings(current["translators"])), translators...))
-		set("translators", translators, source+"; contributor roles reconciled with existing metadata", true)
+		translators = uniqueContributors(append(slices.Clone(currentTranslators), translators...))
+		p.set("translators", translators, p.source+"; contributor roles reconciled with existing metadata", true)
 	}
+}
 
-	// Local subtitles often hold the real title under a generated series heading.
-	// Promote that title and clear its duplicate subtitle as one coherent proposal.
+// isKnownTranslator treats a provider author as a translator only when local metadata already supports it.
+func isKnownTranslator(author string, translators []string) bool {
+	return slices.ContainsFunc(translators, func(name string) bool {
+		return authorSimilarity(name, author) >= .9
+	})
+}
+
+// applyTitle preserves useful local titles when provider titles look generic, translated, or series-only.
+func (p *proposalContext) applyTitle() bool {
 	promotedSubtitle := false
+
 	switch {
-	case localGeneric && !placeholderTitle(localSubtitle) && library.ClassifyBookLabel(localSubtitle, knownSeries).Title != "":
-		set("title", localSubtitle, "Existing subtitle promoted; main title was a series/volume label", false)
-		result.Values["subtitle"] = ""
-		result.Evidence["subtitle"] = "Removed duplicate subtitle after promoting it to the main title"
+	case p.localGeneric && !placeholderTitle(p.localSubtitle) && library.ClassifyBookLabel(p.localSubtitle, p.knownSeries).Title != "":
+		p.set("title", p.localSubtitle, "Existing subtitle promoted; main title was a series/volume label", false)
+		p.result.Values["subtitle"] = ""
+		p.result.Evidence["subtitle"] = "Removed duplicate subtitle after promoting it to the main title"
 		promotedSubtitle = true
-	case remoteTitle == "" && !localGeneric:
-		set("title", localTitle, "Existing specific title preserved; catalog title is a series/volume label", false)
-	case languageConflict && !localGeneric:
-		set("title", localTitle, "Existing title preserved in the book's language", false)
-	case remoteTitle != "":
-		set("title", remoteTitle, source+"; book title separated from series/volume", !localGeneric && textSimilarity(localTitle, remoteTitle) < .65)
-		if candidate.Subtitle != "" && library.NormalizeSearchText(candidate.Subtitle) != library.NormalizeSearchText(remoteTitle) {
-			set("subtitle", candidate.Subtitle, source, false)
-		} else if library.NormalizeSearchText(localSubtitle) == library.NormalizeSearchText(remoteTitle) {
-			result.Values["subtitle"] = ""
-			result.Evidence["subtitle"] = "Removed duplicate of the proposed main title"
-		}
-	case localGeneric && fileLabel.Title != "":
-		set("title", cleanFilenameTitle(fileLabel.Title, identity), "Specific title inferred from filename; verify spelling", true)
+	case p.remoteTitle == "" && !p.localGeneric:
+		p.set("title", p.localTitle, "Existing specific title preserved; catalog title is a series/volume label", false)
+	case p.languageConflict && !p.localGeneric:
+		p.set("title", p.localTitle, "Existing title preserved in the book's language", false)
+	case p.remoteTitle != "":
+		p.set("title", p.remoteTitle, p.source+"; book title separated from series/volume", !p.localGeneric && textSimilarity(p.localTitle, p.remoteTitle) < .65)
+		p.applyRemoteSubtitle()
+	case p.localGeneric && p.fileLabel.Title != "":
+		p.set("title", cleanFilenameTitle(p.fileLabel.Title, p.identity), "Specific title inferred from filename; verify spelling", true)
 	default:
-		result.Evidence["title"] = "No specific title could be established; existing value retained for review"
-	}
-	if !promotedSubtitle && library.Text(result.Values["title"]) == library.Text(current["title"]) && candidate.Subtitle != "" && library.NormalizeSearchText(candidate.Subtitle) != library.NormalizeSearchText(library.Text(result.Values["title"])) {
-		set("subtitle", candidate.Subtitle, source, languageConflict)
+		p.result.Evidence["title"] = "No specific title could be established; existing value retained for review"
 	}
 
-	// Explicit labels provide series evidence. Existing localized series names
-	// are preferred over a catalog's translated equivalent.
-	series, volume, reason := candidate.Series, candidate.SeriesIndex, source
-	if remoteLabel.Series != "" {
-		series, volume, reason = remoteLabel.Series, remoteLabel.Volume, source+"; numbered series label"
+	if !promotedSubtitle && library.Text(p.result.Values["title"]) == library.Text(p.current["title"]) &&
+		p.candidate.Subtitle != "" &&
+		library.NormalizeSearchText(p.candidate.Subtitle) != library.NormalizeSearchText(library.Text(p.result.Values["title"])) {
+		p.set("subtitle", p.candidate.Subtitle, p.source, p.languageConflict)
 	}
-	for _, label := range candidate.SeriesLabels {
-		parts := library.ClassifyBookLabel(label, knownSeries)
-		if parts.Series != "" && parts.Volume != "" {
-			series, volume, reason = parts.Series, parts.Volume, source+"; edition series label"
-			break
-		}
-		// Edition series fields may contain just the name, with no numbering.
-		// Retain that evidence instead of requiring a complete series/volume pair.
-		if series == "" && strings.TrimSpace(label) != "" {
-			series, reason = strings.TrimSpace(label), source+"; edition series label"
-		}
+
+	return promotedSubtitle
+}
+
+// applyRemoteSubtitle keeps catalog subtitles only when they add information beyond the chosen title.
+func (p *proposalContext) applyRemoteSubtitle() {
+	if p.candidate.Subtitle != "" && library.NormalizeSearchText(p.candidate.Subtitle) != library.NormalizeSearchText(p.remoteTitle) {
+		p.set("subtitle", p.candidate.Subtitle, p.source, false)
+	} else if library.NormalizeSearchText(p.localSubtitle) == library.NormalizeSearchText(p.remoteTitle) {
+		p.result.Values["subtitle"] = ""
+		p.result.Evidence["subtitle"] = "Removed duplicate of the proposed main title"
 	}
-	if series == "" && fileLabel.Series != "" {
-		series, volume, reason = fileLabel.Series, fileLabel.Volume, "Filename series/volume label"
+}
+
+// applySeries reconciles numbered series data from provider, filename, and existing metadata.
+func (p *proposalContext) applySeries() {
+	series, volume, reason := p.candidate.Series, p.candidate.SeriesIndex, p.source
+
+	if p.remoteLabel.Series != "" {
+		series, volume, reason = p.remoteLabel.Series, p.remoteLabel.Volume, p.source+"; numbered series label"
 	}
-	if series == "" && localLabel.Series != "" {
-		series, volume, reason = localLabel.Series, localLabel.Volume, "Existing numbered main title"
+
+	series, volume, reason = p.seriesLabelValues(series, volume, reason)
+
+	if series == "" && p.fileLabel.Series != "" {
+		series, volume, reason = p.fileLabel.Series, p.fileLabel.Volume, filenameSeriesEvidence
 	}
+
+	if series == "" && p.localLabel.Series != "" {
+		series, volume, reason = p.localLabel.Series, p.localLabel.Volume, "Existing numbered main title"
+	}
+
 	volumeReason := reason
-	if volume == "" && fileLabel.Volume != "" && library.ClassifyBookLabel(fileLabel.Series, series).Series != "" {
-		volume, volumeReason = fileLabel.Volume, "Filename series/volume label"
+	if volume == "" && p.fileLabel.Volume != "" && library.ClassifyBookLabel(p.fileLabel.Series, series).Series != "" {
+		volume, volumeReason = p.fileLabel.Volume, filenameSeriesEvidence
 	}
-	seriesConflict := identity.Series != "" && series != "" && library.ClassifyBookLabel(series, identity.Series).Series == ""
-	if identity.Series == "" || seriesConflict {
-		set("series", series, reason, seriesConflict || reason == "Filename series/volume label")
-	}
-	if volume != "" {
-		conflict := identity.SeriesIndex != "" && !sameVolume(identity.SeriesIndex, volume)
-		if fileLabel.Volume != "" && library.ClassifyBookLabel(fileLabel.Series, series).Series != "" && !sameVolume(fileLabel.Volume, volume) {
-			conflict = true
-		}
-		set("series_index", volume, volumeReason, conflict || seriesConflict || volumeReason == "Filename series/volume label")
-	}
-	set("original_title", candidate.OriginalTitle, source, library.Text(current["original_title"]) != "" && textSimilarity(library.Text(current["original_title"]), candidate.OriginalTitle) < .65)
 
-	// Cross-record clues are restricted to title structure and explicit roles.
-	// Publication details are never borrowed from a different edition.
-	for _, hint := range candidate.Evidence {
+	p.applySeriesValues(series, volume, reason, volumeReason)
+	p.set("original_title", p.candidate.OriginalTitle, p.source,
+		library.Text(p.current["original_title"]) != "" &&
+			textSimilarity(library.Text(p.current["original_title"]), p.candidate.OriginalTitle) < .65)
+}
+
+// seriesLabelValues prefers explicit series labels emitted by provider edition metadata.
+func (p *proposalContext) seriesLabelValues(series, volume, reason string) (string, string, string) {
+	for _, label := range p.candidate.SeriesLabels {
+		parts := library.ClassifyBookLabel(label, p.knownSeries)
+		if parts.Series != "" && parts.Volume != "" {
+			return parts.Series, parts.Volume, p.source + "; edition series label"
+		}
+
+		if series == "" && strings.TrimSpace(label) != "" {
+			series, reason = strings.TrimSpace(label), p.source+"; edition series label"
+		}
+	}
+
+	return series, volume, reason
+}
+
+// applySeriesValues marks conflicting series data for review instead of silently overwriting it.
+func (p *proposalContext) applySeriesValues(series, volume, reason, volumeReason string) {
+	seriesConflict := p.identity.Series != "" && series != "" &&
+		library.ClassifyBookLabel(series, p.identity.Series).Series == ""
+
+	if p.identity.Series == "" || seriesConflict {
+		p.set("series", series, reason, seriesConflict || reason == filenameSeriesEvidence)
+	}
+
+	if volume == "" {
+		return
+	}
+
+	conflict := p.identity.SeriesIndex != "" && !sameVolume(p.identity.SeriesIndex, volume)
+
+	if p.fileLabel.Volume != "" && library.ClassifyBookLabel(p.fileLabel.Series, series).Series != "" &&
+		!sameVolume(p.fileLabel.Volume, volume) {
+		conflict = true
+	}
+
+	p.set("series_index", volume, volumeReason, conflict || seriesConflict || volumeReason == filenameSeriesEvidence)
+}
+
+// applyCorroboratedEvidence uses cross-record hints only for fields the main record left ambiguous.
+func (p *proposalContext) applyCorroboratedEvidence(promotedSubtitle bool) {
+	for _, hint := range p.candidate.Evidence {
 		if !slices.Contains([]string{"title", "subtitle", "original_title", "series", "series_index"}, hint.Field) {
 			continue
 		}
-		if hint.Field == "title" && (promotedSubtitle || (!localGeneric && (remoteTitle == "" || languageConflict))) {
+
+		if hint.Field == "title" && (promotedSubtitle || !p.localGeneric && (p.remoteTitle == "" || p.languageConflict)) {
 			continue
 		}
-		if hint.Field != "title" && library.Text(result.Values[hint.Field]) != "" {
+
+		if hint.Field != "title" && library.Text(p.result.Values[hint.Field]) != "" {
 			continue
 		}
-		set(hint.Field, hint.Value, "Corroborated by "+hint.Source+": "+hint.URL, true)
+
+		p.set(hint.Field, hint.Value, "Corroborated by "+hint.Source+": "+hint.URL, true)
 	}
-	if library.Text(result.Values["title"]) != library.Text(current["title"]) && library.NormalizeSearchText(library.Text(result.Values["subtitle"])) == library.NormalizeSearchText(library.Text(result.Values["title"])) {
-		result.Values["subtitle"] = ""
-		result.Evidence["subtitle"] = "Removed duplicate of the proposed main title"
-		result.Review["subtitle"] = result.Review["title"]
+
+	if library.Text(p.result.Values["title"]) != library.Text(p.current["title"]) &&
+		library.NormalizeSearchText(library.Text(p.result.Values["subtitle"])) == library.NormalizeSearchText(library.Text(p.result.Values["title"])) {
+		p.result.Values["subtitle"] = ""
+		p.result.Evidence["subtitle"] = "Removed duplicate of the proposed main title"
+		p.result.Review["subtitle"] = p.result.Review["title"]
 	}
-	if candidate.WorkRecord {
-		for _, name := range []string{"publisher", "pubdate", "isbn", "languages"} {
-			if result.Review[name] {
-				result.Evidence[name] += "; work-level data, verify the edition"
-			}
-		}
-	}
-	return result
 }
 
+// appendWorkRecordNotes reminds reviewers when work-level data might describe another edition.
+func (p *proposalContext) appendWorkRecordNotes() {
+	if !p.candidate.WorkRecord {
+		return
+	}
+
+	for _, name := range []string{"publisher", "pubdate", "isbn", "languages"} {
+		if p.result.Review[name] {
+			p.result.Evidence[name] += "; work-level data, verify the edition"
+		}
+	}
+}
+
+// specificCandidateTitle extracts the book title once series/volume labels are removed.
 func specificCandidateTitle(identity library.SearchIdentity, candidate Candidate) string {
 	label := library.ClassifyBookLabel(candidate.Title, identity.Series)
 	if label.Title != "" && !placeholderTitle(label.Title) {
 		return label.Title
 	}
+
 	if subtitle := strings.TrimSpace(candidate.Subtitle); !placeholderTitle(subtitle) && library.ClassifyBookLabel(subtitle, identity.Series).Title != "" {
 		return subtitle
 	}
+
 	return ""
 }
 
+// placeholderTitle recognizes generic placeholders that should not displace a real title.
 func placeholderTitle(value string) bool {
 	switch library.NormalizeSearchText(value) {
 	case "", "unknown", "untitled", "unknown title", "sans titre", "book", "ebook", "title", "titre":
 		return true
 	}
+
 	return false
 }
 
+// differentLanguage reports whether the candidate language conflicts with known local languages.
 func differentLanguage(local []string, remote string) bool {
 	return len(local) > 0 && remote != "" && !slices.ContainsFunc(local, func(value string) bool { return languageKey(value) == languageKey(remote) })
 }
 
+// nonemptyList wraps a single normalized value for list-valued metadata fields.
 func nonemptyList(value string) []string {
 	if strings.TrimSpace(value) == "" {
 		return nil
 	}
+
 	return []string{value}
 }
 
+// sameContributors compares contributor lists with authorSimilarity instead of exact text equality.
 func sameContributors(local, remote []string) bool {
 	if len(local) != len(remote) {
 		return false
 	}
+
 	used := make([]bool, len(remote))
 	for _, name := range local {
 		index := slices.IndexFunc(remote, func(other string) bool { return authorSimilarity(name, other) >= .9 })
 		if index < 0 || used[index] {
 			return false
 		}
+
 		used[index] = true
 	}
+
 	return true
 }
 
+// uniqueContributors preserves first-seen display names while deduplicating by normalized form.
 func uniqueContributors(names []string) []string {
 	seen := make(map[string]bool)
 	var out []string
+
 	for _, name := range names {
 		name = strings.TrimSpace(name)
 		key := library.NormalizeSearchText(name)
@@ -269,20 +394,24 @@ func uniqueContributors(names []string) []string {
 			out = append(out, name)
 		}
 	}
+
 	return out
 }
 
+// sameVolume compares decimal-looking volume labels numerically so 2 and 2,0 match.
 func sameVolume(a, b string) bool {
 	left, leftErr := strconv.ParseFloat(strings.ReplaceAll(a, ",", "."), 64)
 	right, rightErr := strconv.ParseFloat(strings.ReplaceAll(b, ",", "."), 64)
 	return leftErr == nil && rightErr == nil && left == right
 }
 
+// cleanFilenameTitle reuses filename parsing to strip residual author and series text from guesses.
 func cleanFilenameTitle(title string, identity library.SearchIdentity) string {
 	values := map[string]any{"authors": identity.Authors, "series": identity.Series}
 	guessed := library.IdentifySearch(values, title+".epub")
 	if len(guessed.Titles) > 0 {
 		return guessed.Titles[0]
 	}
+
 	return strings.TrimSpace(title)
 }

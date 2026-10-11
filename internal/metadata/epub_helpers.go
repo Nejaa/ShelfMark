@@ -72,6 +72,7 @@ func readZipXML(f *zip.File) (*etree.Document, error) {
 	return d, err
 }
 
+// dcValues returns trimmed Dublin Core values in document order.
 func dcValues(meta *etree.Element, tag string) []string {
 	var out []string
 	for _, node := range meta.ChildElements() {
@@ -79,23 +80,28 @@ func dcValues(meta *etree.Element, tag string) []string {
 			out = append(out, strings.TrimSpace(node.Text()))
 		}
 	}
+
 	return out
 }
 
+// firstDC returns the first value for a Dublin Core element.
 func firstDC(meta *etree.Element, tag string) string {
 	values := dcValues(meta, tag)
 	if len(values) > 0 {
 		return values[0]
 	}
+
 	return ""
 }
 
+// replaceDC rewrites every instance of a repeated Dublin Core element.
 func replaceDC(meta *etree.Element, tag string, values []string) {
 	for _, node := range meta.ChildElements() {
 		if node.Tag == strings.TrimPrefix(tag, "dc:") {
 			meta.RemoveChild(node)
 		}
 	}
+
 	for _, v := range values {
 		if v != "" {
 			meta.CreateElement(tag).SetText(v)
@@ -103,6 +109,7 @@ func replaceDC(meta *etree.Element, tag string, values []string) {
 	}
 }
 
+// setDC keeps a singleton Dublin Core field as one element or removes it when cleared.
 func setDC(meta *etree.Element, tag, value string) {
 	local := strings.TrimPrefix(tag, "dc:")
 	nodes := meta.FindElements("./" + local)
@@ -110,6 +117,7 @@ func setDC(meta *etree.Element, tag, value string) {
 		for _, n := range nodes {
 			meta.RemoveChild(n)
 		}
+
 		return
 	}
 
@@ -123,6 +131,7 @@ func setDC(meta *etree.Element, tag, value string) {
 	}
 }
 
+// upsertMeta updates or creates a Calibre-style named meta element.
 func upsertMeta(meta *etree.Element, name, value string) {
 	var node *etree.Element
 	for _, m := range meta.FindElements("./meta") {

@@ -9,13 +9,16 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// prepareRuntime grants the extracted runtime the read/execute rights required by WebView2's sandboxed renderer.
 func prepareRuntime(dir string) error {
 	if _, err := os.Stat(filepath.Join(dir, "webview2")); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
+
 		return err
 	}
+
 	// Fixed Version WebView2 120+ uses an AppContainer renderer on Windows 10.
 	// Grant its package groups read/execute access to the extracted code only;
 	// preserve existing permissions and never grant access to application data.
@@ -58,5 +61,6 @@ func prepareRuntime(dir string) error {
 
 	err = windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
 	runtime.KeepAlive(updated)
+
 	return err
 }

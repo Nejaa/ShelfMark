@@ -25,7 +25,7 @@
         <button id="bulkMatches" class="quiet" disabled>Background matches</button>
         <button id="cancelMatches" class="quiet" hidden>Stop matching</button>
         <button id="stagedSaveButton" class="quiet" disabled>Review drafts</button>
-        <span id="scanStatus" role="status" class="note">Books stay on this computer.</span>
+        <output id="scanStatus" class="note">Books stay on this computer.</output>
     </div>
     <div class="layout">
         <section class="panel">
@@ -93,9 +93,9 @@
                         <h2>Matching</h2>
                         <label class="check"><input name="inspect_content" type="checkbox"> Inspect local content for ISBNs</label>
                         <label class="check"><input name="ocr" type="checkbox" aria-describedby="ocrWarning"> Use OCR for text in images</label>
-                        <p id="ocrWarning" class="note ocr-warning" role="status" aria-live="polite" hidden>
+                        <output id="ocrWarning" class="note ocr-warning" aria-live="polite" hidden>
                             OCR is unavailable on this server. Check shelfmark.log for details.
-                        </p>
+                        </output>
                         <p class="note">Content inspection runs locally. OCR requires content inspection and can slow searches.</p>
                         <label for="max_candidates">Maximum matches per book</label>
                         <input id="max_candidates" name="max_candidates" type="number" min="1" max="50" required>
@@ -120,7 +120,7 @@
                     </section>
                     <div class="actions settings-actions">
                         <button id="saveSettings" type="submit" disabled>Save settings</button>
-                        <span id="settingsStatus" role="status" class="note">Loading settings…</span>
+                        <output id="settingsStatus" class="note">Loading settings…</output>
                     </div>
                 </div>
             </div>
@@ -137,7 +137,7 @@
             <button id="confirmSaveReview" disabled>Save selected updates</button>
             <button id="discardSelectedDrafts" class="quiet" disabled>Discard selected drafts</button>
             <button id="cancelSaveReview" class="quiet">Close</button>
-            <span id="saveReviewStatus" class="status" role="status"></span>
+            <output id="saveReviewStatus" class="status"></output>
         </div>
     </div>
 </dialog>

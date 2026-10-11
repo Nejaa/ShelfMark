@@ -123,10 +123,7 @@ func (m *memoryRepository) DiscardDrafts(_ context.Context, paths []string) erro
 }
 
 func (m *memoryRepository) FinishSave(_ context.Context, path, fingerprint string, metadata, staged map[string]any) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.states[path] = library.State{Path: path, Fingerprint: fingerprint, Metadata: cloneMap(metadata), Staged: cloneMap(staged)}
-	return nil
+	return m.Stage(context.Background(), path, fingerprint, metadata, staged)
 }
 
 func cloneMap(src map[string]any) map[string]any {
@@ -257,28 +254,36 @@ func TestHandlerRejectsMalformedJSONAndCrossOriginRequests(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			req := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))
 			req.Header.Set("Content-Type", test.contentType)
-			if test.origin != "" {
-				req.Header.Set("Origin", test.origin)
-			}
-			if test.fetchSite != "" {
-				req.Header.Set("Sec-Fetch-Site", test.fetchSite)
-			}
+			setOptionalHeader(req, "Origin", test.origin)
+			setOptionalHeader(req, "Sec-Fetch-Site", test.fetchSite)
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, req)
 			if response.Code != test.status {
 				t.Fatalf("status = %d, want %d (%s)", response.Code, test.status, response.Body.String())
 			}
-			if response.Header().Get("X-Content-Type-Options") != "nosniff" || response.Header().Get("Referrer-Policy") != "no-referrer" || response.Header().Get("Content-Security-Policy") == "" {
-				t.Fatalf("security headers missing: %#v", response.Header())
-			}
-			if response.Header().Get("Cache-Control") != "no-store" {
-				t.Fatalf("API response Cache-Control = %q", response.Header().Get("Cache-Control"))
-			}
+			assertAPISecurityHeaders(t, response)
 		})
 	}
 }
 
-func TestApplyStageSaveSelectedFieldAndDiscard(t *testing.T) {
+func setOptionalHeader(req *http.Request, name, value string) {
+	if value != "" {
+		req.Header.Set(name, value)
+	}
+}
+
+func assertAPISecurityHeaders(t *testing.T, response *httptest.ResponseRecorder) {
+	t.Helper()
+	header := response.Header()
+	if header.Get("X-Content-Type-Options") != "nosniff" || header.Get("Referrer-Policy") != "no-referrer" || header.Get("Content-Security-Policy") == "" {
+		t.Fatalf("security headers missing: %#v", header)
+	}
+	if header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("API response Cache-Control = %q", header.Get("Cache-Control"))
+	}
+}
+
+func TestProposalAndApplyStageMetadata(t *testing.T) {
 	server, db, _, path := newTestServer(t)
 	id := idFor(path)
 	proposal := request(t, server.Handler(), http.MethodPost, "/api/proposal", `{"id":`+mustJSON(t, id)+`,"values":{"title":"Manual proposal"}}`, "application/json")
@@ -295,13 +300,7 @@ func TestApplyStageSaveSelectedFieldAndDiscard(t *testing.T) {
 	if len(proposalResult.Fields) == 0 || !proposalResult.CoverEditable {
 		t.Fatalf("proposal response missing editor fields: %+v", proposalResult)
 	}
-	foundTitle := false
-	for _, field := range proposalResult.Fields {
-		if field.Name == "title" {
-			foundTitle = field.Value == "Manual proposal" && field.Changed
-		}
-	}
-	if !foundTitle {
+	if !hasProposedTitle(proposalResult.Fields) {
 		t.Fatalf("manual title edit not reflected in proposal: %+v", proposalResult.Fields)
 	}
 	apply := request(t, server.Handler(), http.MethodPost, "/api/apply", `{"id":`+mustJSON(t, id)+`,"metadata":{"title":"Reviewed title","subtitle":"Unselected subtitle"}}`, "application/json")
@@ -311,26 +310,26 @@ func TestApplyStageSaveSelectedFieldAndDiscard(t *testing.T) {
 	if state, _ := db.State(context.Background(), path); state.Staged["title"] != "Reviewed title" || state.Staged["subtitle"] != "Unselected subtitle" {
 		t.Fatalf("apply did not stage supplied metadata: %#v", state.Staged)
 	}
+}
 
-	stageView := request(t, server.Handler(), http.MethodPost, "/api/staged", `{}`, "application/json")
-	if stageView.Code != http.StatusOK {
-		t.Fatalf("staged review failed: %s", stageView.Body.String())
+func hasProposedTitle(fields []proposalField) bool {
+	for _, field := range fields {
+		if field.Name == "title" && field.Value == "Manual proposal" && field.Changed {
+			return true
+		}
 	}
-	var review struct {
-		Books []struct {
-			Fingerprint  string `json:"fingerprint"`
-			DraftVersion string `json:"draft_version"`
-		} `json:"books"`
+	return false
+}
+
+func TestSaveSelectedFields(t *testing.T) {
+	server, db, _, path := newTestServer(t)
+	id := idFor(path)
+	apply := request(t, server.Handler(), http.MethodPost, "/api/apply", `{"id":`+mustJSON(t, id)+`,"metadata":{"title":"Reviewed title","subtitle":"Unselected subtitle"}}`, "application/json")
+	if apply.Code != http.StatusOK {
+		t.Fatalf("apply failed: %d %s", apply.Code, apply.Body.String())
 	}
-	if err := json.Unmarshal(stageView.Body.Bytes(), &review); err != nil {
-		t.Fatal(err)
-	}
-	if len(review.Books) != 1 {
-		t.Fatalf("staged review books = %d", len(review.Books))
-	}
-	first := review.Books[0]
-	saveBody := mustJSON(t, map[string]any{"books": []any{map[string]any{"id": id, "fingerprint": first.Fingerprint, "draft_version": first.DraftVersion, "fields": []string{"title"}}}})
-	saved := request(t, server.Handler(), http.MethodPost, "/api/save", saveBody, "application/json")
+	first := stagedReview(t, server.Handler())
+	saved := saveReviewedFields(t, server.Handler(), id, first, "title")
 	if saved.Code != http.StatusOK {
 		t.Fatalf("save failed: %d %s", saved.Code, saved.Body.String())
 	}
@@ -345,14 +344,8 @@ func TestApplyStageSaveSelectedFieldAndDiscard(t *testing.T) {
 	if state.Staged["subtitle"] != "Unselected subtitle" || state.Staged["title"] != nil {
 		t.Fatalf("save should retain only unselected fields, got %#v", state.Staged)
 	}
-
-	stageView = request(t, server.Handler(), http.MethodPost, "/api/staged", `{}`, "application/json")
-	if err := json.Unmarshal(stageView.Body.Bytes(), &review); err != nil {
-		t.Fatal(err)
-	}
-	second := review.Books[0]
-	saveBody = mustJSON(t, map[string]any{"books": []any{map[string]any{"id": id, "fingerprint": second.Fingerprint, "draft_version": second.DraftVersion, "fields": []string{"subtitle"}}}})
-	saved = request(t, server.Handler(), http.MethodPost, "/api/save", saveBody, "application/json")
+	second := stagedReview(t, server.Handler())
+	saved = saveReviewedFields(t, server.Handler(), id, second, "subtitle")
 	if saved.Code != http.StatusOK {
 		t.Fatalf("second save failed: %d %s", saved.Code, saved.Body.String())
 	}
@@ -360,12 +353,42 @@ func TestApplyStageSaveSelectedFieldAndDiscard(t *testing.T) {
 	if len(state.Staged) != 0 {
 		t.Fatalf("all selected fields should be cleared after save, got %#v", state.Staged)
 	}
+}
 
-	apply = request(t, server.Handler(), http.MethodPost, "/api/apply", `{"id":`+mustJSON(t, id)+`,"metadata":{"title":"Discard me"}}`, "application/json")
-	if apply.Code != http.StatusOK {
-		t.Fatalf("second apply failed: %s", apply.Body.String())
+type reviewedDraft struct {
+	Fingerprint  string `json:"fingerprint"`
+	DraftVersion string `json:"draft_version"`
+}
+
+func stagedReview(t *testing.T, handler http.Handler) reviewedDraft {
+	t.Helper()
+	response := request(t, handler, http.MethodPost, "/api/staged", `{}`, "application/json")
+	if response.Code != http.StatusOK {
+		t.Fatalf("staged review failed: %d %s", response.Code, response.Body.String())
 	}
-	state, _ = db.State(context.Background(), path)
+	var review struct {
+		Books []reviewedDraft `json:"books"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &review); err != nil || len(review.Books) != 1 {
+		t.Fatalf("staged review invalid: %v %s", err, response.Body.String())
+	}
+	return review.Books[0]
+}
+
+func saveReviewedFields(t *testing.T, handler http.Handler, id string, review reviewedDraft, fields ...string) *httptest.ResponseRecorder {
+	t.Helper()
+	body := mustJSON(t, map[string]any{"books": []any{map[string]any{"id": id, "fingerprint": review.Fingerprint, "draft_version": review.DraftVersion, "fields": fields}}})
+	return request(t, handler, http.MethodPost, "/api/save", body, "application/json")
+}
+
+func TestDiscardDrafts(t *testing.T) {
+	server, db, _, path := newTestServer(t)
+	id := idFor(path)
+	apply := request(t, server.Handler(), http.MethodPost, "/api/apply", `{"id":`+mustJSON(t, id)+`,"metadata":{"title":"Discard me"}}`, "application/json")
+	if apply.Code != http.StatusOK {
+		t.Fatalf("apply failed: %s", apply.Body.String())
+	}
+	state, _ := db.State(context.Background(), path)
 	discardBody := mustJSON(t, map[string]any{"books": []any{map[string]string{"id": id, "draft_version": draftVersion(state.Staged)}}})
 	discard := request(t, server.Handler(), http.MethodPost, "/api/drafts/discard", discardBody, "application/json")
 	if discard.Code != http.StatusOK {
@@ -419,42 +442,48 @@ func TestSaveRejectsStaleFileAndDraftVersionsWithoutWriting(t *testing.T) {
 func TestSaveAndDiscardRejectStaleDraftVersion(t *testing.T) {
 	server, db, _, path := newTestServer(t)
 	id := idFor(path)
-	response := request(t, server.Handler(), http.MethodPost, "/api/apply", `{"id":`+mustJSON(t, id)+`,"metadata":{"title":"First draft"}}`, "application/json")
-	if response.Code != http.StatusOK {
-		t.Fatalf("apply failed: %s", response.Body.String())
-	}
-	response = request(t, server.Handler(), http.MethodPost, "/api/staged", `{}`, "application/json")
-	var review struct {
-		Books []struct {
-			Fingerprint  string `json:"fingerprint"`
-			DraftVersion string `json:"draft_version"`
-		} `json:"books"`
-	}
-	if err := json.Unmarshal(response.Body.Bytes(), &review); err != nil || len(review.Books) != 1 {
-		t.Fatalf("staged review invalid: %v %s", err, response.Body.String())
-	}
-	oldReview := review.Books[0]
-	response = request(t, server.Handler(), http.MethodPost, "/api/apply", `{"id":`+mustJSON(t, id)+`,"metadata":{"title":"Updated draft"}}`, "application/json")
-	if response.Code != http.StatusOK {
-		t.Fatalf("revised apply failed: %s", response.Body.String())
-	}
-	oldSelection := map[string]any{"books": []any{map[string]any{"id": id, "fingerprint": oldReview.Fingerprint, "draft_version": oldReview.DraftVersion, "fields": []string{"title"}}}}
-	response = request(t, server.Handler(), http.MethodPost, "/api/save", mustJSON(t, oldSelection), "application/json")
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("stale draft save status = %d, want 400: %s", response.Code, response.Body.String())
-	}
-	discard := map[string]any{"books": []any{map[string]string{"id": id, "draft_version": oldReview.DraftVersion}}}
-	response = request(t, server.Handler(), http.MethodPost, "/api/drafts/discard", mustJSON(t, discard), "application/json")
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("stale draft discard status = %d, want 400: %s", response.Code, response.Body.String())
-	}
+	assertDraftTitle(t, server.Handler(), id, "First draft")
+	oldReview := stagedReview(t, server.Handler())
+	assertDraftTitle(t, server.Handler(), id, "Updated draft")
+	assertRejectedStaleSave(t, server.Handler(), id, oldReview)
+	assertRejectedStaleDiscard(t, server.Handler(), id, oldReview.DraftVersion)
 	state, _ := db.State(context.Background(), path)
 	if state.Staged["title"] != "Updated draft" {
 		t.Fatalf("stale selection changed newer draft: %#v", state.Staged)
 	}
 }
 
-func TestSearchCacheAndBackgroundCompletion(t *testing.T) {
+func assertDraftTitle(t *testing.T, handler http.Handler, id, title string) {
+	t.Helper()
+	body := `{"id":` + mustJSON(t, id) + `,"metadata":{"title":` + mustJSON(t, title) + `}}`
+	response := request(t, handler, http.MethodPost, "/api/apply", body, "application/json")
+	if response.Code != http.StatusOK {
+		t.Fatalf("apply failed: %s", response.Body.String())
+	}
+}
+
+func assertRejectedStaleSave(t *testing.T, handler http.Handler, id string, review reviewedDraft) {
+	t.Helper()
+	selection := map[string]any{"books": []any{map[string]any{
+		"id": id, "fingerprint": review.Fingerprint, "draft_version": review.DraftVersion, "fields": []string{"title"},
+	}}}
+	response := request(t, handler, http.MethodPost, "/api/save", mustJSON(t, selection), "application/json")
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("stale draft save status = %d, want 400: %s", response.Code, response.Body.String())
+	}
+}
+
+func assertRejectedStaleDiscard(t *testing.T, handler http.Handler, id, draftVersion string) {
+	t.Helper()
+	discard := map[string]any{"books": []any{map[string]string{"id": id, "draft_version": draftVersion}}}
+	response := request(t, handler, http.MethodPost, "/api/drafts/discard", mustJSON(t, discard), "application/json")
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("stale draft discard status = %d, want 400: %s", response.Code, response.Body.String())
+	}
+}
+
+func newSearchTestServer(t *testing.T) (*Server, *fakeCatalog, string, string) {
+	t.Helper()
 	root := t.TempDir()
 	path := filepath.Join(root, "book.epub")
 	writeTestEPUB(t, path, "Cacheable title")
@@ -469,27 +498,56 @@ func TestSearchCacheAndBackgroundCompletion(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("scan failed: %s", response.Body.String())
 	}
+	return server, catalogue, root, path
+}
+
+func TestAutomaticSearchUsesCachedSelectionResult(t *testing.T) {
+	server, catalogue, _, path := newSearchTestServer(t)
+	defer server.Close()
 	id := idFor(path)
-	body := `{"id":` + mustJSON(t, id) + `,"query":"Cacheable title"}`
-	response = request(t, server.Handler(), http.MethodPost, "/api/search", body, "application/json")
+	body := `{"id":` + mustJSON(t, id) + `}`
+	response := request(t, server.Handler(), http.MethodPost, "/api/search", body, "application/json")
 	if response.Code != http.StatusOK {
 		t.Fatalf("search failed: %d %s", response.Code, response.Body.String())
+	}
+	var searched catalog.Result
+	if err := json.Unmarshal(response.Body.Bytes(), &searched); err != nil {
+		t.Fatalf("decode search result: %v", err)
+	}
+	if len(searched.Candidates) != 1 || searched.Candidates[0].Title != "Cacheable title" {
+		t.Fatalf("search candidates = %+v, want cached candidate", searched.Candidates)
 	}
 	response = request(t, server.Handler(), http.MethodPost, "/api/search/cached", `{"id":`+mustJSON(t, id)+`}`, "application/json")
 	if response.Code != http.StatusOK {
 		t.Fatalf("cached search failed: %d %s", response.Code, response.Body.String())
 	}
+	var cached catalog.Result
+	if err := json.Unmarshal(response.Body.Bytes(), &cached); err != nil {
+		t.Fatalf("decode cached result: %v", err)
+	}
+	if len(cached.Candidates) != 1 || cached.Candidates[0].Title != "Cacheable title" {
+		t.Fatalf("cached candidates = %+v, want previously searched candidate", cached.Candidates)
+	}
 	if catalogue.callCount() != 1 {
 		t.Fatalf("cached selection triggered catalog request; calls = %d", catalogue.callCount())
 	}
+}
 
-	response = request(t, server.Handler(), http.MethodPost, "/api/background/start", `{"folder":`+mustJSON(t, root)+`}`, "application/json")
+func TestBackgroundMatchingCompletes(t *testing.T) {
+	server, _, root, _ := newSearchTestServer(t)
+	defer server.Close()
+	response := request(t, server.Handler(), http.MethodPost, "/api/background/start", `{"folder":`+mustJSON(t, root)+`}`, "application/json")
 	if response.Code != http.StatusOK {
 		t.Fatalf("background start failed: %d %s", response.Code, response.Body.String())
 	}
+	waitForBackgroundCompletion(t, server)
+}
+
+func waitForBackgroundCompletion(t *testing.T, server *Server) {
+	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		response = request(t, server.Handler(), http.MethodGet, "/api/background", "", "")
+		response := request(t, server.Handler(), http.MethodGet, "/api/background", "", "")
 		var status matchProgress
 		if err := json.Unmarshal(response.Body.Bytes(), &status); err != nil {
 			t.Fatal(err)
@@ -498,12 +556,10 @@ func TestSearchCacheAndBackgroundCompletion(t *testing.T) {
 			if status.Completed != 1 || status.Failures != 0 {
 				t.Fatalf("unexpected background progress: %+v", status)
 			}
-			server.Close()
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	server.Close()
 	t.Fatal("background matching did not complete in time")
 }
 

@@ -12,23 +12,29 @@ import (
 // paths through the scan index instead of accepting arbitrary client paths.
 func (s *Server) uiError(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+
 	var in struct {
 		Message string `json:"message"`
 		Stack   string `json:"stack"`
 		BookID  string `json:"book_id"`
 	}
+
 	if err := decode(r, &in); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+
 	now := time.Now().UnixNano()
 	last := s.lastUIError.Load()
 	if strings.TrimSpace(in.Message) != "" && now-last >= int64(time.Second) && s.lastUIError.CompareAndSwap(last, now) {
 		slog.Error("browser UI failed", "message", boundedDiagnostic(in.Message, 1000), "stack", boundedDiagnostic(in.Stack, 4000), "path", s.lookupPath(in.BookID))
 	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// boundedDiagnostic trims oversized browser diagnostics on rune boundaries so
+// logs keep enough context without storing unbounded client-supplied text.
 func boundedDiagnostic(value string, limit int) string {
 	runes := []rune(value)
 	return string(runes[:min(len(runes), limit)])

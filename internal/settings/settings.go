@@ -15,23 +15,40 @@ type Preferences struct {
 	// Diagnostics are applied immediately and restored on the next launch.
 	LogLevel slog.Level `json:"log_level"`
 
+	// LastFolder remembers the last library path the user chose in the file picker.
 	LastFolder string `json:"last_folder"`
 
-	// Library traversal and local content inspection.
-	Recursive      bool `json:"recursive"`
-	IncludeHidden  bool `json:"include_hidden"`
-	InspectContent bool `json:"inspect_content"`
-	OCR            bool `json:"ocr"`
+	// Recursive enables recursive library scans under the chosen root.
+	Recursive bool `json:"recursive"`
 
-	// Catalog enablement and optional credentials.
-	GoogleBooks       bool   `json:"google_books"`
-	OpenLibrary       bool   `json:"open_library"`
-	InternetArchive   bool   `json:"internet_archive"`
+	// IncludeHidden allows hidden files and directories to participate in scans.
+	IncludeHidden bool `json:"include_hidden"`
+
+	// InspectContent permits local metadata extraction and similar file inspection work.
+	InspectContent bool `json:"inspect_content"`
+
+	// OCR enables the bundled OCR runtime when content inspection needs it.
+	OCR bool `json:"ocr"`
+
+	// GoogleBooks enables Google Books lookups.
+	GoogleBooks bool `json:"google_books"`
+
+	// OpenLibrary enables Open Library lookups.
+	OpenLibrary bool `json:"open_library"`
+
+	// InternetArchive enables Internet Archive lookups.
+	InternetArchive bool `json:"internet_archive"`
+
+	// GoogleBooksAPIKey stores the optional Google Books API key.
 	GoogleBooksAPIKey string `json:"google_books_api_key,omitempty"`
 
-	// Search limits, cache lifetime, and browser background matching delay.
-	MaxCandidates   int `json:"max_candidates"`
-	CacheDays       int `json:"cache_days"`
+	// MaxCandidates limits how many remote matches Shelfmark keeps for review.
+	MaxCandidates int `json:"max_candidates"`
+
+	// CacheDays controls how long remote catalog matches remain reusable.
+	CacheDays int `json:"cache_days"`
+
+	// BackgroundDelay delays automatic browser-side matching after edits.
 	BackgroundDelay int `json:"background_delay_seconds"`
 }
 
@@ -70,6 +87,8 @@ func Load(ctx context.Context, db Repository) (Preferences, error) {
 			return p, fmt.Errorf("read preferences: %w", err)
 		}
 	} else {
+		// Fold pre-Preferences settings into the new structure without requiring
+		// a migration before the user opens the updated application once.
 		p.LastFolder, err = db.GetSetting(ctx, "last_folder")
 		if err != nil {
 			return p, err

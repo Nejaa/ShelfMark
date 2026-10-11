@@ -25,6 +25,7 @@ func main() {
 	os.Exit(execute())
 }
 
+// execute performs startup work and returns the process exit code.
 func execute() int {
 	console := consoleOutput()
 
@@ -56,6 +57,7 @@ func execute() int {
 	return 0
 }
 
+// run opens the store, starts HTTP serving, and optionally hands control to the desktop UI.
 func run(programDir string) error {
 	options, err := parseOptions(programDir)
 	if errors.Is(err, flag.ErrHelp) {
@@ -82,6 +84,7 @@ func run(programDir string) error {
 			slog.Error("could not close database", "error", err)
 		}
 	}()
+
 	prefs, err := settings.Load(ctx, db)
 	if err != nil {
 		return fmt.Errorf("load preferences: %w", err)
@@ -92,6 +95,7 @@ func run(programDir string) error {
 	if !options.logLevelSet {
 		logLevel.Set(prefs.LogLevel)
 	}
+
 	slog.Info("starting Shelfmark", "data_dir", options.dataDir, "listen", options.listen,
 		"headless", options.headless, "log_level", logLevel.Level().String())
 
@@ -102,8 +106,44 @@ func run(programDir string) error {
 
 	searcher := catalog.New()
 	application := app.New(db, searcher, app.WithLogLevel(&logLevel), app.WithContext(ctx))
+	server, serveErr, url := startHTTPServer(ctx, listener, application.Handler(), stop)
+
+	// OCR is independent of the GUI and must also be available in headless mode.
+	// The server is already listening; a native-engine failure is recoverable.
+	closeOCR, ocrErr := metadata.InitializeOCR(ctx, programDir)
+	defer closeOCR()
+
+	// Join background work before removing its native OCR runtime.
+	defer application.Close()
+
+	if ocrErr != nil {
+		slog.Warn("could not prepare bundled OCR", "error", ocrErr,
+			"hint", "check write permissions beside the executable and in the temporary directory")
+	}
+
+	if prefs.InspectContent && prefs.OCR {
+		metadata.CheckOCR(ctx)
+	} else {
+		slog.Debug("OCR capability check skipped", "reason", "local OCR is disabled in settings")
+	}
+
+	opened, windowErr := tryDesktopWindow(ctx, options, programDir, url)
+	if opened {
+		stop()
+		return shutdown(server)
+	}
+
+	if windowErr != nil && ctx.Err() == nil {
+		slog.Warn("desktop window unavailable; serving HTTP only", "error", windowErr)
+	}
+
+	return serveUntilStopped(ctx, server, serveErr)
+}
+
+// startHTTPServer serves in the background and returns the bound loopback URL used by browsers and the helper.
+func startHTTPServer(ctx context.Context, listener net.Listener, handler http.Handler, stop context.CancelFunc) (*http.Server, <-chan error, string) {
 	server := &http.Server{
-		Handler:  application.Handler(),
+		Handler:  handler,
 		ErrorLog: slog.NewLogLogger(slog.Default().Handler(), slog.LevelError),
 		BaseContext: func(net.Listener) context.Context {
 			return ctx
@@ -113,7 +153,6 @@ func run(programDir string) error {
 		MaxHeaderBytes:    1 << 20,
 	}
 
-	// Serve before starting the helper: GUI failure must leave HTTP usable.
 	serveErr := make(chan error, 1)
 	go func() {
 		err := server.Serve(listener)
@@ -132,43 +171,34 @@ func run(programDir string) error {
 	url := "http://" + net.JoinHostPort(host, port)
 	slog.Info("Shelfmark is ready (Ctrl+C to stop)", "url", url)
 
-	// OCR is independent of the GUI and must also be available in headless mode.
-	// The server is already listening; a native-engine failure is recoverable.
-	closeOCR, ocrErr := metadata.InitializeOCR(ctx, programDir)
-	defer closeOCR()
-	// Join background work before removing its native OCR runtime.
-	defer application.Close()
-	if ocrErr != nil {
-		slog.Warn("could not prepare bundled OCR", "error", ocrErr,
-			"hint", "check write permissions beside the executable and in the temporary directory")
-	}
+	return server, serveErr, url
+}
 
-	if prefs.InspectContent && prefs.OCR {
-		metadata.CheckOCR(ctx)
-	} else {
-		slog.Debug("OCR capability check skipped", "reason", "local OCR is disabled in settings")
-	}
-
-	if !options.headless && graphical() {
-		windowErr := desktopConsent(programDir, url)
-		if windowErr == nil {
-			windowErr = openDesktop(ctx, url)
-		}
-		// A successful call returns only after the user closes the window.
-		if windowErr == nil {
-			stop()
-			return shutdown(server)
-		}
-
-		if ctx.Err() == nil {
-			slog.Warn("desktop window unavailable; serving HTTP only", "error", windowErr)
-		}
-	} else if options.headless {
+// tryDesktopWindow decides whether the native helper should own the current session or leave the server in HTTP-only mode.
+func tryDesktopWindow(ctx context.Context, options options, programDir, url string) (bool, error) {
+	if options.headless {
 		slog.Info("serving HTTP only", "reason", "headless mode requested")
-	} else {
-		slog.Warn("no graphical display detected; serving HTTP only", "hint", "use a browser, or launch in a desktop session with DISPLAY or WAYLAND_DISPLAY set")
+		return false, nil
 	}
 
+	if !graphical() {
+		slog.Warn("no graphical display detected; serving HTTP only", "hint", "use a browser, or launch in a desktop session with DISPLAY or WAYLAND_DISPLAY set")
+		return false, nil
+	}
+
+	if err := desktopConsent(programDir, url); err != nil {
+		return false, err
+	}
+
+	if err := openDesktop(ctx, url); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+// serveUntilStopped translates context cancellation and server exit into one shutdown path.
+func serveUntilStopped(ctx context.Context, server *http.Server, serveErr <-chan error) error {
 	select {
 	case <-ctx.Done():
 		if err := shutdown(server); err != nil {
@@ -190,6 +220,7 @@ func run(programDir string) error {
 	}
 }
 
+// shutdown asks the HTTP server to drain active requests before closing listeners.
 func shutdown(server *http.Server) error {
 	slog.Info("shutting down HTTP server")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -204,6 +235,7 @@ func shutdown(server *http.Server) error {
 	return nil
 }
 
+// graphical reports whether a native window has a reasonable chance of appearing on this platform.
 func graphical() bool {
 	return runtime.GOOS == "windows" || runtime.GOOS == "darwin" || os.Getenv("DISPLAY") != "" || os.Getenv("WAYLAND_DISPLAY") != ""
 }

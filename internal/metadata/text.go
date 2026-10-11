@@ -29,6 +29,7 @@ func frontBack(value string, front, back int) string {
 	return value[:frontEnd] + "\n" + value[backStart:]
 }
 
+// htmlText strips markup, scripts and styles so text matching sees readable content only.
 func htmlText(source string) string {
 	doc, err := html.Parse(strings.NewReader(source))
 	if err != nil {
@@ -42,14 +43,18 @@ func htmlText(source string) string {
 			b.WriteString(n.Data)
 			b.WriteByte(' ')
 		}
+
 		if n.Type == html.ElementNode && (n.Data == "script" || n.Data == "style") {
 			return
 		}
+
 		for child := n.FirstChild; child != nil; child = child.NextSibling {
 			walk(child)
 		}
 	}
+
 	walk(doc)
+
 	return strings.Join(strings.Fields(b.String()), " ")
 }
 
@@ -62,6 +67,7 @@ func pdfText(path string) string {
 	}
 
 	defer func() { _ = file.Close() }()
+
 	total := reader.NumPage()
 	pages := map[int]bool{}
 	for i := 1; i <= min(total, 20); i++ {
@@ -89,6 +95,7 @@ func pdfText(path string) string {
 		if err != nil {
 			slog.Warn("PDF page text could not be extracted; skipping page", "path", path, "page", i, "error", err)
 		}
+
 		if err == nil {
 			b.WriteString(text)
 			b.WriteByte('\n')
@@ -98,5 +105,6 @@ func pdfText(path string) string {
 	if b.Len() == 0 {
 		slog.Warn("PDF has no extractable text for matching", "path", path, "hint", "use a PDF with a text layer; OCR of PDF pages is not supported")
 	}
+
 	return frontBack(b.String(), 200000, 50000)
 }

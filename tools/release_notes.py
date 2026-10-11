@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
-"""Append direct download links to a GitHub release description."""
+"""Append ShelfMark download links to a GitHub release body.
+
+Usage:
+    python tools/release_notes.py --repository OWNER/REPO --tag TAG \
+        --input existing.md --output updated.md
+
+Only the ShelfMark-managed downloads block is replaced; the rest of the release
+notes are preserved exactly as provided.
+"""
+
 import argparse
 from pathlib import Path
 import re
@@ -16,6 +25,7 @@ DOWNLOADS = (
 
 
 def main():
+    """Rewrite the managed download section at the bottom of a release body."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--repository', required=True, help='GitHub owner/repository')
     parser.add_argument('--tag', required=True)
@@ -31,18 +41,19 @@ def main():
     # Retries replace only our marked section, retaining generated notes and
     # any manually edited text. Put the updated section at the bottom again.
     existing = args.input.read_text(encoding='utf-8')
-    body = re.sub(re.escape(START) + r'.*?' + re.escape(END), '', existing,
-                  flags=re.DOTALL).rstrip()
+    body = re.sub(re.escape(START) + r'.*?' + re.escape(END), '', existing, flags=re.DOTALL).rstrip()
+
     section = [START, '## Downloads', '', '| Platform | Download |', '| --- | --- |']
     for platform, filename in DOWNLOADS:
         section.append(f'| {platform} | [{filename}]({base}/{filename}) |')
     section.extend([
         '',
-        f'[Checksums]({base}/SHA256SUMS) · [Usage and requirements]({guide})',
+        f'[Checksums]({base}/SHA256SUMS) ? [Usage and requirements]({guide})',
         '',
         'License notices and source archives are available under **Assets**.',
         END,
     ])
+
     prefix = body + '\n\n' if body else ''
     args.output.write_text(prefix + '\n'.join(section) + '\n', encoding='utf-8')
 

@@ -11,12 +11,14 @@ import (
 	"shelfmark/internal/library"
 )
 
+// folderView identifies a scanned directory in the client-side folder tree.
 type folderView struct {
 	Path  string `json:"path"`
 	Name  string `json:"name"`
 	Depth int    `json:"depth"`
 }
 
+// libraryView is the full response model for the current library browser state.
 type libraryView struct {
 	Root        string       `json:"root"`
 	Folder      string       `json:"folder"`
@@ -27,12 +29,14 @@ type libraryView struct {
 	Warnings    []string     `json:"warnings"`
 }
 
+// makeBook combines file metadata and staged edits into one API model.
 func makeBook(path string, working, current map[string]any, staged bool) book {
 	return book{ID: idFor(path), Path: path, Name: filepath.Base(path), Metadata: working,
 		FileMetadata: current, Staged: staged, SearchQuery: library.SearchQuery(working, filepath.Base(path)),
 		CoverEditable: strings.EqualFold(filepath.Ext(path), ".epub")}
 }
 
+// sortBooks applies the shared library ordering used by both scan and review views.
 func sortBooks(books []book) {
 	order := library.NewOrdering()
 	sort.Slice(books, func(i, j int) bool {
@@ -47,6 +51,8 @@ func withinFolder(path, folder string) bool {
 	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative)
 }
 
+// makeLibraryView filters visible books while preserving folder counts for the
+// entire subtree so empty filtered results do not hide populated folders.
 func makeLibraryView(root, folder, filter string, books []book) libraryView {
 	view := libraryView{Root: root, Folder: folder, Books: []book{}, Folders: []folderView{}, Total: len(books), Warnings: []string{}}
 	dirs := map[string]bool{}
@@ -79,6 +85,7 @@ func makeLibraryView(root, folder, filter string, books []book) libraryView {
 		}
 		view.Folders = append(view.Folders, folderView{Path: dir, Name: filepath.ToSlash(relative), Depth: depth})
 	}
+
 	sort.Slice(view.Folders, func(i, j int) bool { return view.Folders[i].Name < view.Folders[j].Name })
 	return view
 }
@@ -94,6 +101,7 @@ func (s *Server) scannedBooks(ctx context.Context, folder, filter string) (libra
 		paths = append(paths, path)
 	}
 	s.pathsMu.RUnlock()
+
 	if root == "" {
 		return libraryView{}, errors.New("scan a library folder first")
 	}
@@ -101,9 +109,11 @@ func (s *Server) scannedBooks(ctx context.Context, folder, filter string) (libra
 		folder = root
 	}
 	folder = filepath.Clean(folder)
+
 	if !withinFolder(folder, root) {
 		return libraryView{}, errors.New("folder is outside the current scan")
 	}
+
 	books := make([]book, 0, len(paths))
 	for _, path := range paths {
 		if err := ctx.Err(); err != nil {
@@ -118,6 +128,7 @@ func (s *Server) scannedBooks(ctx context.Context, folder, filter string) (libra
 	return makeLibraryView(root, folder, filter, books), nil
 }
 
+// libraryView returns the current scan filtered to one folder subtree.
 func (s *Server) libraryView(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Folder string `json:"folder"`
@@ -132,5 +143,6 @@ func (s *Server) libraryView(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err)
 		return
 	}
+
 	jsonOut(w, view)
 }

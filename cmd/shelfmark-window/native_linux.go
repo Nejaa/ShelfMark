@@ -24,10 +24,12 @@ import "C"
 
 import webview "github.com/webview/webview_go"
 
+// canCreateWindow checks that GTK can initialize before the helper commits to startup.
 func canCreateWindow() bool {
 	return C.can_create_window() != 0
 }
 
+// configureWindow disables GPU acceleration for the bundled Linux runtime.
 func configureWindow(window webview.WebView) {
 	C.configure_window(window.Window())
 }

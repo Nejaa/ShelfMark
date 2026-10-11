@@ -34,12 +34,10 @@ var imageExtensions = map[string]bool{
 	".bmp":  true,
 }
 
+// epubCover resolves the EPUB cover image through manifest metadata instead of
+// guessing from filenames.
 func epubCover(files []*zip.File) ([]byte, string) {
-	byName := map[string]*zip.File{}
-	for _, f := range files {
-		byName[f.Name] = f
-	}
-
+	byName := zipIndex(files)
 	opf, root, err := epubPackage(files)
 	if err != nil {
 		return nil, ""
@@ -61,29 +59,86 @@ func epubCover(files []*zip.File) ([]byte, string) {
 	base := path.Dir(opf)
 	for _, item := range manifest.FindElements("./item") {
 		props := strings.Fields(item.SelectAttrValue("properties", ""))
-		if item.SelectAttrValue("id", "") == coverID || contains(props, "cover-image") {
-			href := urlPath(item.SelectAttrValue("href", ""))
-			name := path.Clean(path.Join(base, href))
-			if data := zipBytes(byName[name]); len(data) > 0 {
-				mime := item.SelectAttrValue("media-type", "")
-				if !strings.HasPrefix(mime, "image/") {
-					mime = coverMIME(strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), "."))
-				}
-				return data, mime
+		if item.SelectAttrValue("id", "") != coverID && !contains(props, "cover-image") {
+			continue
+		}
+
+		name := path.Clean(path.Join(base, urlPath(item.SelectAttrValue("href", ""))))
+		if data := zipBytes(byName[name]); len(data) > 0 {
+			mime := item.SelectAttrValue("media-type", "")
+			if !strings.HasPrefix(mime, "image/") {
+				mime = coverMIME(strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), "."))
 			}
+
+			return data, mime
 		}
 	}
 
 	return nil, ""
 }
 
+// zipIndex builds constant-time lookup by archive member name.
+func zipIndex(files []*zip.File) map[string]*zip.File {
+	byName := map[string]*zip.File{}
+	for _, f := range files {
+		byName[f.Name] = f
+	}
+
+	return byName
+}
+
+// isbnClues collects barcode-derived ISBN lines before any OCR text so search
+// terms can match exact identifiers even if OCR later adds noisy prose.
+type isbnClues struct {
+	recognized []string
+	seen       map[string]bool
+}
+
+// newISBNClues starts a deduplicating collector for image-derived clues.
+func newISBNClues() *isbnClues {
+	return &isbnClues{seen: map[string]bool{}}
+}
+
+// addBarcodes records each decoded ISBN once in a search-friendly form.
+func (c *isbnClues) addBarcodes(data []byte) {
+	for _, isbn := range ISBNs(decodeISBN(data)) {
+		if !c.seen[isbn] {
+			c.recognized = append(c.recognized, "ISBN "+isbn)
+			c.seen[isbn] = true
+		}
+	}
+}
+
+// scanImage reads barcodes and, when requested, OCR text. It reports whether
+// OCR found body text, which ends front-matter scanning.
+func (c *isbnClues) scanImage(ctx context.Context, data []byte, useOCR bool) bool {
+	c.addBarcodes(data)
+
+	if !useOCR {
+		return false
+	}
+
+	text := OCR(ctx, data)
+	if text == "" {
+		return false
+	}
+
+	c.recognized = append(c.recognized, text)
+
+	return looksLikeBody(text)
+}
+
+// firstArchiveCover returns the first image in filename order for cover previews
+// in simple image archives that do not expose explicit cover metadata.
 func firstArchiveCover(files []*zip.File) ([]byte, string) {
 	images := imageFiles(files)
+
 	if len(images) == 0 {
 		return nil, ""
 	}
 
 	name := images[0].Name
+
 	return zipBytes(images[0]), coverMIME(strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), "."))
 }
 
@@ -98,18 +153,111 @@ func epubText(ctx context.Context, filename string, ocr bool) string {
 	}
 
 	defer func() { _ = archive.Close() }()
+
 	opf, root, err := epubPackage(archive.File)
 	if err != nil {
 		slog.Warn("EPUB content inspection unavailable", "path", filename, "error", err)
 		return ""
 	}
 
-	byName := map[string]*zip.File{}
-	for _, f := range archive.File {
-		byName[f.Name] = f
+	byName := zipIndex(archive.File)
+	base := path.Dir(opf)
+	order := epubReadingOrder(root)
+	clues := newISBNClues()
+	collectEPUBCoverBarcodes(root, base, byName, clues)
+
+	var texts []string
+	imageDocs := map[string]bool{}
+	for docIndex, item := range order {
+		if ctx.Err() != nil {
+			break
+		}
+
+		page, ok := epubSpineDocument(item, docIndex, len(order), base, byName)
+		if !ok {
+			continue
+		}
+
+		texts = append(texts, htmlText(page.source))
+		scanEPUBDocumentImages(ctx, page, byName, imageDocs, clues, ocr)
 	}
 
-	base := path.Dir(opf)
+	return frontBack(strings.Join(append(clues.recognized, texts...), "\n"), 200000, 50000)
+}
+
+// collectEPUBCoverBarcodes inspects the declared cover before spine traversal
+// because many books place the ISBN barcode only on the cover image.
+func collectEPUBCoverBarcodes(root *etree.Element, base string, byName map[string]*zip.File, clues *isbnClues) {
+	for _, item := range root.FindElements("./manifest/item") {
+		props := strings.Fields(item.SelectAttrValue("properties", ""))
+		if !contains(props, "cover-image") {
+			continue
+		}
+
+		name := path.Clean(path.Join(base, urlPath(item.SelectAttrValue("href", ""))))
+		if file := byName[name]; file != nil {
+			clues.addBarcodes(zipBytes(file))
+		}
+	}
+}
+
+// epubSpinePage holds the parsed HTML and position flags used while sampling
+// the beginning and end of a book.
+type epubSpinePage struct {
+	source           string
+	document         *html.Node
+	name             string
+	opening, closing bool
+}
+
+// epubSpineDocument resolves one spine entry to parsed HTML when it falls
+// inside the sampled opening or closing window.
+func epubSpineDocument(item *etree.Element, index, count int, base string, byName map[string]*zip.File) (epubSpinePage, bool) {
+	if !strings.Contains(item.SelectAttrValue("media-type", ""), "html") || index >= 8 && index < count-4 {
+		return epubSpinePage{}, false
+	}
+
+	name := path.Clean(path.Join(base, urlPath(item.SelectAttrValue("href", ""))))
+	file := byName[name]
+	if file == nil {
+		return epubSpinePage{}, false
+	}
+
+	source := string(zipBytes(file))
+	doc, err := html.Parse(strings.NewReader(source))
+	if err != nil {
+		return epubSpinePage{}, false
+	}
+
+	return epubSpinePage{source: source, document: doc, name: name, opening: index < 8, closing: index >= count-4}, true
+}
+
+// scanEPUBDocumentImages samples only the images likely to appear in front or back matter.
+func scanEPUBDocumentImages(ctx context.Context, page epubSpinePage, byName map[string]*zip.File, seen map[string]bool, clues *isbnClues, ocr bool) {
+	for _, src := range limitEPUBImages(htmlImageSources(page.document), page.opening, page.closing) {
+		imageName := epubImageName(page.name, src)
+		if seen[imageName] {
+			continue
+		}
+
+		seen[imageName] = true
+
+		if imageFile := byName[imageName]; imageFile != nil && clues.scanImage(ctx, zipBytes(imageFile), page.opening && ocr) {
+			break
+		}
+	}
+}
+
+// epubImageName resolves document-relative image paths while discarding anchors and queries.
+func epubImageName(documentName, source string) string {
+	source = strings.Split(source, "#")[0]
+	source = strings.Split(source, "?")[0]
+	return path.Clean(path.Join(path.Dir(documentName), urlPath(source)))
+}
+
+// epubReadingOrder returns manifest items in spine order, or every manifest
+// item when the spine is empty.
+func epubReadingOrder(root *etree.Element) []*etree.Element {
 	manifest := map[string]*etree.Element{}
 	for _, item := range root.FindElements("./manifest/item") {
 		manifest[item.SelectAttrValue("id", "")] = item
@@ -127,107 +275,43 @@ func epubText(ctx context.Context, filename string, ocr bool) string {
 			order = append(order, item)
 		}
 	}
+	return order
+}
 
-	var texts, recognized []string
-	isbnSeen := map[string]bool{}
-	for _, item := range root.FindElements("./manifest/item") {
-		props := strings.Fields(item.SelectAttrValue("properties", ""))
-		if contains(props, "cover-image") {
-			name := path.Clean(path.Join(base, urlPath(item.SelectAttrValue("href", ""))))
-			if file := byName[name]; file != nil {
-				for _, isbn := range ISBNs(decodeISBN(zipBytes(file))) {
-					if !isbnSeen[isbn] {
-						recognized = append(recognized, "ISBN "+isbn)
-						isbnSeen[isbn] = true
-					}
+// htmlImageSources collects HTML img and SVG image references in document order.
+func htmlImageSources(doc *html.Node) []string {
+	var images []string
+	var walk func(*html.Node)
+	walk = func(node *html.Node) {
+		if node.Type == html.ElementNode && (node.Data == "img" || node.Data == "image") {
+			for _, a := range node.Attr {
+				if a.Key == "src" || a.Key == "href" {
+					images = append(images, a.Val)
 				}
 			}
+		}
+
+		for c := node.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
 		}
 	}
+	walk(doc)
+	return images
+}
 
-	imageDocs := map[string]bool{}
-	for docIndex, item := range order {
-		if ctx.Err() != nil {
-			break
-		}
-
-		if !strings.Contains(item.SelectAttrValue("media-type", ""), "html") {
-			continue
-		}
-
-		if docIndex >= 8 && docIndex < len(order)-4 {
-			continue
-		}
-
-		name := path.Clean(path.Join(base, urlPath(item.SelectAttrValue("href", ""))))
-		file := byName[name]
-		if file == nil {
-			continue
-		}
-
-		source := string(zipBytes(file))
-		doc, err := html.Parse(strings.NewReader(source))
-		if err != nil {
-			continue
-		}
-
-		texts = append(texts, htmlText(source))
-		var images []string
-		var walk func(*html.Node)
-		walk = func(node *html.Node) {
-			if node.Type == html.ElementNode && (node.Data == "img" || node.Data == "image") {
-				for _, a := range node.Attr {
-					if a.Key == "src" || a.Key == "href" {
-						images = append(images, a.Val)
-					}
-				}
-			}
-			for c := node.FirstChild; c != nil; c = c.NextSibling {
-				walk(c)
-			}
-		}
-		walk(doc)
-		opening := docIndex < 8
-		closing := docIndex >= len(order)-4
-		limit := len(images)
-		if opening && limit > 12 {
-			limit = 12
-		}
-
-		if closing && limit > 5 {
-			images = images[max(0, limit-5):]
-			limit = len(images)
-		}
-
-		for i := 0; i < limit; i++ {
-			imageName := path.Clean(path.Join(path.Dir(name), urlPath(strings.Split(strings.Split(images[i], "#")[0], "?")[0])))
-			if imageDocs[imageName] {
-				continue
-			}
-
-			imageDocs[imageName] = true
-			if imageFile := byName[imageName]; imageFile != nil {
-				data := zipBytes(imageFile)
-				for _, isbn := range ISBNs(decodeISBN(data)) {
-					if !isbnSeen[isbn] {
-						recognized = append(recognized, "ISBN "+isbn)
-						isbnSeen[isbn] = true
-					}
-				}
-				if opening && ocr {
-					if text := OCR(ctx, data); text != "" {
-						recognized = append(recognized, text)
-						if looksLikeBody(text) {
-							opening = false
-							break
-						}
-					}
-				}
-			}
-		}
+// limitEPUBImages keeps the first 12 images of opening sections and the last 5
+// of closing sections.
+func limitEPUBImages(images []string, opening, closing bool) []string {
+	limit := len(images)
+	if opening && limit > 12 {
+		limit = 12
 	}
 
-	return frontBack(strings.Join(append(recognized, texts...), "\n"), 200000, 50000)
+	if closing && limit > 5 {
+		return images[max(0, limit-5):]
+	}
+
+	return images[:limit]
 }
 
 // cbzText samples the first 20 and last 10 comic images in natural filename order.
@@ -240,6 +324,7 @@ func cbzText(ctx context.Context, filename string, ocr bool) string {
 	}
 
 	defer func() { _ = archive.Close() }()
+
 	images := imageFiles(archive.File)
 	if len(images) == 0 {
 		return ""
@@ -260,34 +345,23 @@ func cbzText(ctx context.Context, filename string, ocr bool) string {
 	}
 
 	sort.Ints(ordered)
-	var recognized []string
-	seen := map[string]bool{}
+
+	clues := newISBNClues()
 	for _, i := range ordered {
 		if ctx.Err() != nil {
 			break
 		}
 
-		data := zipBytes(images[i])
-		for _, isbn := range ISBNs(decodeISBN(data)) {
-			if !seen[isbn] {
-				recognized = append(recognized, "ISBN "+isbn)
-				seen[isbn] = true
-			}
-		}
-
-		if i < 20 && ocr {
-			if text := OCR(ctx, data); text != "" {
-				recognized = append(recognized, text)
-				if looksLikeBody(text) {
-					break
-				}
-			}
+		if clues.scanImage(ctx, zipBytes(images[i]), i < 20 && ocr) {
+			break
 		}
 	}
 
-	return frontBack(strings.Join(recognized, "\n"), 200000, 50000)
+	return frontBack(strings.Join(clues.recognized, "\n"), 200000, 50000)
 }
 
+// fb2Text flattens FB2 body elements because bibliographic clues are usually in
+// the opening body content rather than in the description block alone.
 func fb2Text(filename string) string {
 	doc := etree.NewDocument()
 	if err := doc.ReadFromFile(filename); err != nil {
@@ -308,6 +382,7 @@ func fb2Text(filename string) string {
 	return frontBack(strings.Join(parts, " "), 200000, 50000)
 }
 
+// elementText concatenates descendant character data without adding formatting.
 func elementText(node *etree.Element) string {
 	var b strings.Builder
 	var walk func(*etree.Element)
@@ -321,11 +396,14 @@ func elementText(node *etree.Element) string {
 			}
 		}
 	}
+
 	walk(node)
+
 	return b.String()
 }
 
-// zipBytes bounds decompressed members and ignores unreadable optional content.
+// zipBytes bounds decompressed members so optional inspection never expands an
+// archive entry beyond 16 MiB of memory.
 func zipBytes(file *zip.File) []byte {
 	if file == nil {
 		return nil
@@ -347,6 +425,7 @@ func zipBytes(file *zip.File) []byte {
 	return data
 }
 
+// imageFiles keeps archive images in natural page order for cover and OCR sampling.
 func imageFiles(files []*zip.File) []*zip.File {
 	var out []*zip.File
 	for _, f := range files {
@@ -358,9 +437,11 @@ func imageFiles(files []*zip.File) []*zip.File {
 	sort.Slice(out, func(i, j int) bool {
 		return naturalLess(out[i].Name, out[j].Name)
 	})
+
 	return out
 }
 
+// naturalLess sorts "10" after "2" so numbered page files stay in reading order.
 func naturalLess(a, b string) bool {
 	re := regexp.MustCompile(`\d+|\D+`)
 	aa, bb := re.FindAllString(strings.ToLower(a), -1), re.FindAllString(strings.ToLower(b), -1)
@@ -372,6 +453,7 @@ func naturalLess(a, b string) bool {
 			if xn != yn {
 				return xn < yn
 			}
+
 			continue
 		}
 
@@ -415,9 +497,11 @@ func downloadCover(ctx context.Context, rawURL string) (string, string, error) {
 		if len(via) >= 10 {
 			return fmt.Errorf("too many cover redirects")
 		}
+
 		if req.URL.Scheme != "https" {
 			return fmt.Errorf("cover redirect must use HTTPS")
 		}
+
 		return nil
 	}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)

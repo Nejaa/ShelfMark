@@ -106,17 +106,25 @@ func TestRankCandidateUsesIndependentTitleAuthorAndISBNEvidence(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := rankCandidate(request, tt.candidate)
-			if got.ISBN != tt.wantISBN {
-				t.Errorf("ISBN match = %v, want %v", got.ISBN, tt.wantISBN)
-			}
-			if got.Strong != tt.wantStrong {
-				t.Errorf("Strong = %v, want %v (rank %#v)", got.Strong, tt.wantStrong, got)
-			}
-			if tt.minScore != 0 && got.Total < tt.minScore || tt.maxScore != 0 && got.Total > tt.maxScore {
-				t.Errorf("score %v outside [%v, %v]", got.Total, tt.minScore, tt.maxScore)
-			}
+			assertRankCandidate(t, request, tt.candidate, tt.wantISBN, tt.wantStrong, tt.minScore, tt.maxScore)
 		})
+	}
+}
+
+func assertRankCandidate(t *testing.T, request SearchRequest, candidate Candidate, wantISBN, wantStrong bool, minScore, maxScore float64) {
+	t.Helper()
+	got := rankCandidate(request, candidate)
+	if got.ISBN != wantISBN {
+		t.Errorf("ISBN match = %v, want %v", got.ISBN, wantISBN)
+	}
+	if got.Strong != wantStrong {
+		t.Errorf("Strong = %v, want %v (rank %#v)", got.Strong, wantStrong, got)
+	}
+	if minScore != 0 && got.Total < minScore {
+		t.Errorf("score %v is below minimum %v", got.Total, minScore)
+	}
+	if maxScore != 0 && got.Total > maxScore {
+		t.Errorf("score %v is above maximum %v", got.Total, maxScore)
 	}
 }
 
@@ -124,7 +132,7 @@ func TestRankCandidatePenalizesDifferentNumberedTitle(t *testing.T) {
 	request := SearchRequest{Identity: library.SearchIdentity{Titles: []string{"Dune 1"}}}
 	correct := rankCandidate(request, Candidate{Title: "Dune 1"})
 	wrongVolume := rankCandidate(request, Candidate{Title: "Dune 2"})
-	if !(correct.Total > wrongVolume.Total) {
+	if correct.Total <= wrongVolume.Total {
 		t.Errorf("same-volume score %v should exceed wrong-volume score %v", correct.Total, wrongVolume.Total)
 	}
 }
@@ -163,20 +171,27 @@ func TestPlanSearch(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := planSearch(tt.request)
-			if tt.maxLen == 0 && !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("planSearch() = %#v, want %#v", got, tt.want)
-				return
-			}
-			if tt.maxLen > 0 {
-				if len(got) > tt.maxLen {
-					t.Fatalf("plan has %d queries, want at most %d: %#v", len(got), tt.maxLen, got)
-				}
-				if !reflect.DeepEqual(got[:len(tt.want)], tt.want) {
-					t.Errorf("leading queries = %#v, want %#v", got[:len(tt.want)], tt.want)
-				}
-			}
+			assertSearchPlan(t, tt.request, tt.want, tt.maxLen)
 		})
+	}
+}
+
+func assertSearchPlan(t *testing.T, request SearchRequest, want []searchQuery, maxLen int) {
+	t.Helper()
+	got := planSearch(request)
+	if maxLen == 0 {
+		if reflect.DeepEqual(got, want) {
+			return
+		}
+		t.Errorf("planSearch() = %#v, want %#v", got, want)
+		return
+	}
+	if len(got) > maxLen {
+		t.Fatalf("plan has %d queries, want at most %d: %#v", len(got), maxLen, got)
+	}
+	leading := got[:len(want)]
+	if !reflect.DeepEqual(leading, want) {
+		t.Errorf("leading queries = %#v, want %#v", leading, want)
 	}
 }
 
@@ -326,32 +341,7 @@ func allowImmediateRequest(service *Service) {
 
 func TestCatalogProviderParsingWithHTTPFixtures(t *testing.T) {
 	seen := make(map[string]bool)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen[r.URL.Path] = true
-		if r.Header.Get("User-Agent") != "Shelfmark/1.0 (local ebook metadata helper)" {
-			t.Errorf("User-Agent = %q", r.Header.Get("User-Agent"))
-		}
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/books/v1/volumes":
-			if got := r.URL.Query().Get("q"); got != `intitle:"The Hobbit" inauthor:"J. R. R. Tolkien"` {
-				t.Errorf("Google Books q = %q", got)
-			}
-			_, _ = w.Write([]byte(`{"items":[{"id":"hobbit-1","volumeInfo":{"title":"The Hobbit","subtitle":"There and Back Again","authors":["J. R. R. Tolkien"],"publisher":"Allen & Unwin","publishedDate":"1937","industryIdentifiers":[{"type":"ISBN_10","identifier":"054792822X"},{"type":"ISBN_13","identifier":"9780547928227"}],"imageLinks":{"thumbnail":"http://images.example/cover"},"language":"en","categories":["Fantasy"]}}]}`))
-		case "/advancedsearch.php":
-			if got := r.URL.Query().Get("q"); got != `title:"The Hobbit" AND creator:"J. R. R. Tolkien"` {
-				t.Errorf("Internet Archive q = %q", got)
-			}
-			_, _ = w.Write([]byte(`{"response":{"docs":[{"identifier":"the-hobbit","title":"The Hobbit","isbn":["9780547928227","054792822X"],"creator":["J. R. R. Tolkien"],"year":"1937","language":["eng"],"description":"A hobbit goes on an adventure."},{"identifier":"","title":"Invalid row"}]}}`))
-		case "/search.json":
-			if r.URL.Query().Get("title") != "The Hobbit" || r.URL.Query().Get("author") != "J. R. R. Tolkien" {
-				t.Errorf("Open Library query parameters = %v", r.URL.Query())
-			}
-			_, _ = w.Write([]byte(`{"docs":[{"key":"/works/OL123W","title":"The Hobbit","author_name":["J. R. R. Tolkien"],"first_publish_year":1937,"language":["eng"],"isbn":["054792822X","9780547928227"],"publisher":["Allen & Unwin"],"cover_i":123,"subject":["Fantasy"]}]}`))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
+	server := httptest.NewServer(catalogProviderFixture(t, seen))
 	defer server.Close()
 	service := newTestService(server)
 	query := searchQuery{Kind: "title-author", Title: "The Hobbit", Author: "J. R. R. Tolkien"}
@@ -361,43 +351,105 @@ func TestCatalogProviderParsingWithHTTPFixtures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Google Books search: %v", err)
 	}
-	if len(google) != 1 {
-		t.Fatalf("Google Books candidates = %d, want 1", len(google))
-	}
-	if google[0].ISBN != "9780547928227" || !reflect.DeepEqual(google[0].ISBNs, []string{"054792822X", "9780547928227"}) {
-		t.Errorf("Google Books ISBN data = %q / %#v", google[0].ISBN, google[0].ISBNs)
-	}
-	if google[0].Cover != "https://images.example/cover" || google[0].FieldSources["title"] != "Google Books" {
-		t.Errorf("Google Books cover/provenance = %q / %#v", google[0].Cover, google[0].FieldSources)
-	}
+	assertGoogleBooksFixture(t, google)
 
 	allowImmediateRequest(service)
 	archive, err := service.internetArchive(context.Background(), query)
 	if err != nil {
 		t.Fatalf("Internet Archive search: %v", err)
 	}
-	if len(archive) != 1 {
-		t.Fatalf("Internet Archive candidates = %d, want 1", len(archive))
-	}
-	if archive[0].Title != "The Hobbit" || !reflect.DeepEqual(archive[0].Authors, []string{"J. R. R. Tolkien"}) || archive[0].ISBN != "9780547928227" || archive[0].Pubdate != "1937" {
-		t.Errorf("Internet Archive candidate = %#v", archive[0])
-	}
+	assertInternetArchiveFixture(t, archive)
 
 	allowImmediateRequest(service)
 	openLibrary, err := service.openLibrary(context.Background(), query)
 	if err != nil {
 		t.Fatalf("Open Library search: %v", err)
 	}
-	if len(openLibrary) != 1 {
-		t.Fatalf("Open Library candidates = %d, want 1", len(openLibrary))
-	}
-	if !openLibrary[0].WorkRecord || openLibrary[0].ISBN != "054792822X" || openLibrary[0].Cover != "https://covers.openlibrary.org/b/id/123-M.jpg" || openLibrary[0].Pubdate != "1937" {
-		t.Errorf("Open Library candidate = %#v", openLibrary[0])
-	}
+	assertOpenLibraryFixture(t, openLibrary)
 	for _, endpoint := range []string{"/books/v1/volumes", "/advancedsearch.php", "/search.json"} {
 		if !seen[endpoint] {
 			t.Errorf("fixture endpoint %q was not called", endpoint)
 		}
+	}
+}
+
+func catalogProviderFixture(t *testing.T, seen map[string]bool) http.Handler {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/books/v1/volumes", func(w http.ResponseWriter, r *http.Request) {
+		seen[r.URL.Path] = true
+		assertCatalogUserAgent(t, r)
+		if got := r.URL.Query().Get("q"); got != `intitle:"The Hobbit" inauthor:"J. R. R. Tolkien"` {
+			t.Errorf("Google Books q = %q", got)
+		}
+		writeCatalogFixture(w, `{"items":[{"id":"hobbit-1","volumeInfo":{"title":"The Hobbit","subtitle":"There and Back Again","authors":["J. R. R. Tolkien"],"publisher":"Allen & Unwin","publishedDate":"1937","industryIdentifiers":[{"type":"ISBN_10","identifier":"054792822X"},{"type":"ISBN_13","identifier":"9780547928227"}],"imageLinks":{"thumbnail":"http://images.example/cover"},"language":"en","categories":["Fantasy"]}}]}`)
+	})
+	mux.HandleFunc("/advancedsearch.php", func(w http.ResponseWriter, r *http.Request) {
+		seen[r.URL.Path] = true
+		assertCatalogUserAgent(t, r)
+		if got := r.URL.Query().Get("q"); got != `title:"The Hobbit" AND creator:"J. R. R. Tolkien"` {
+			t.Errorf("Internet Archive q = %q", got)
+		}
+		writeCatalogFixture(w, `{"response":{"docs":[{"identifier":"the-hobbit","title":"The Hobbit","isbn":["9780547928227","054792822X"],"creator":["J. R. R. Tolkien"],"year":"1937","language":["eng"],"description":"A hobbit goes on an adventure."},{"identifier":"","title":"Invalid row"}]}}`)
+	})
+	mux.HandleFunc("/search.json", func(w http.ResponseWriter, r *http.Request) {
+		seen[r.URL.Path] = true
+		assertCatalogUserAgent(t, r)
+		if r.URL.Query().Get("title") != "The Hobbit" || r.URL.Query().Get("author") != "J. R. R. Tolkien" {
+			t.Errorf("Open Library query parameters = %v", r.URL.Query())
+		}
+		writeCatalogFixture(w, `{"docs":[{"key":"/works/OL123W","title":"The Hobbit","author_name":["J. R. R. Tolkien"],"first_publish_year":1937,"language":["eng"],"isbn":["054792822X","9780547928227"],"publisher":["Allen & Unwin"],"cover_i":123,"subject":["Fantasy"]}]}`)
+	})
+	return mux
+}
+
+func assertCatalogUserAgent(t *testing.T, request *http.Request) {
+	t.Helper()
+	if got := request.Header.Get("User-Agent"); got != "Shelfmark/1.0 (local ebook metadata helper)" {
+		t.Errorf("User-Agent = %q", got)
+	}
+}
+
+func writeCatalogFixture(w http.ResponseWriter, body string) {
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(body))
+}
+
+func assertGoogleBooksFixture(t *testing.T, candidates []Candidate) {
+	t.Helper()
+	if len(candidates) != 1 {
+		t.Fatalf("Google Books candidates = %d, want 1", len(candidates))
+	}
+	got := candidates[0]
+	if got.ISBN != "9780547928227" || !reflect.DeepEqual(got.ISBNs, []string{"054792822X", "9780547928227"}) {
+		t.Errorf("Google Books ISBN data = %q / %#v", got.ISBN, got.ISBNs)
+	}
+	if got.Cover != "https://images.example/cover" || got.FieldSources["title"] != "Google Books" {
+		t.Errorf("Google Books cover/provenance = %q / %#v", got.Cover, got.FieldSources)
+	}
+}
+
+func assertInternetArchiveFixture(t *testing.T, candidates []Candidate) {
+	t.Helper()
+	if len(candidates) != 1 {
+		t.Fatalf("Internet Archive candidates = %d, want 1", len(candidates))
+	}
+	got := candidates[0]
+	if got.Title != "The Hobbit" || !reflect.DeepEqual(got.Authors, []string{"J. R. R. Tolkien"}) ||
+		got.ISBN != "9780547928227" || got.Pubdate != "1937" {
+		t.Errorf("Internet Archive candidate = %#v", got)
+	}
+}
+
+func assertOpenLibraryFixture(t *testing.T, candidates []Candidate) {
+	t.Helper()
+	if len(candidates) != 1 {
+		t.Fatalf("Open Library candidates = %d, want 1", len(candidates))
+	}
+	got := candidates[0]
+	if !got.WorkRecord || got.ISBN != "054792822X" ||
+		got.Cover != "https://covers.openlibrary.org/b/id/123-M.jpg" || got.Pubdate != "1937" {
+		t.Errorf("Open Library candidate = %#v", got)
 	}
 }
 

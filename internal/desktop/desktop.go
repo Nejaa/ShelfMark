@@ -51,6 +51,7 @@ func Run(ctx context.Context, url string) error {
 
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
 	name := "shelfmark-window"
 	if runtime.GOOS == "windows" {
 		name += ".exe"
@@ -68,13 +69,16 @@ func Run(ctx context.Context, url string) error {
 		}
 
 		defer removeTemporaryDirectory(profile)
+
 		cmd.Env = append(cmd.Env, "WEBVIEW2_USER_DATA_FOLDER="+profile)
 	}
 
 	defer cleanupProcess(cmd)
+
 	cmd.Stderr = diagnosticWriter{}
 	configureProcess(cmd)
 	cmd.WaitDelay = 3 * time.Second
+
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -83,6 +87,7 @@ func Run(ctx context.Context, url string) error {
 	defer func() {
 		_ = stdin.Close()
 	}()
+
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -111,12 +116,14 @@ func Run(ctx context.Context, url string) error {
 			}
 		}
 	}()
+
 	done := make(chan error, 1)
 	go func() {
 		err := cmd.Wait()
 		<-scanned
 		done <- err
 	}()
+
 	// Only GUI startup is bounded; a healthy window may stay open indefinitely.
 	timer := time.NewTimer(45 * time.Second)
 	defer timer.Stop()
@@ -142,6 +149,7 @@ func Run(ctx context.Context, url string) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+
 		return fmt.Errorf("desktop helper exited unexpectedly: %w", err)
 	}
 
@@ -149,6 +157,7 @@ func Run(ctx context.Context, url string) error {
 	return nil
 }
 
+// removeTemporaryDirectory retries on Windows because WebView2 children can release files shortly after process exit.
 func removeTemporaryDirectory(dir string) {
 	// WebView2 subprocesses can briefly retain DLL and profile handles after
 	// their helper exits. Windows cannot unlink those files until they close.
@@ -156,6 +165,7 @@ func removeTemporaryDirectory(dir string) {
 	if runtime.GOOS == "windows" {
 		deadline = deadline.Add(5 * time.Second)
 	}
+
 	for {
 		err := os.RemoveAll(dir)
 		if err == nil {
@@ -182,8 +192,10 @@ func extract(dir string) error {
 	defer func() {
 		_ = zipped.Close()
 	}()
+
 	archive := tar.NewReader(zipped)
 	var total int64
+
 	for {
 		entry, err := archive.Next()
 		if errors.Is(err, io.EOF) {
@@ -203,6 +215,7 @@ func extract(dir string) error {
 			if err := os.MkdirAll(path, 0700); err != nil {
 				return err
 			}
+
 			continue
 		}
 
@@ -295,6 +308,7 @@ func environment(dir string) []string {
 		if _, err := os.Stat(filepath.Join(dir, "webview2")); err == nil {
 			env = append(env, "WEBVIEW2_BROWSER_EXECUTABLE_FOLDER="+filepath.Join(dir, "webview2"))
 		}
+
 		return env
 	}
 
@@ -334,6 +348,7 @@ func environment(dir string) []string {
 				filtered = append(filtered, entry)
 			}
 		}
+
 		env = append(filtered, key+"="+value)
 	}
 
@@ -344,11 +359,13 @@ func environment(dir string) []string {
 // separate protocol and must not be mixed with these diagnostic messages.
 type diagnosticWriter struct{}
 
+// Write logs each native diagnostic line separately so helper prefixes do not collapse multiple messages.
 func (diagnosticWriter) Write(data []byte) (int, error) {
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
 		if line != "" {
 			slog.Warn("desktop runtime diagnostic", "message", line)
 		}
 	}
+
 	return len(data), nil
 }

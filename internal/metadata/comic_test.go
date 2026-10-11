@@ -137,6 +137,23 @@ func TestCBZPublicationDatePrecisionAndClearing(t *testing.T) {
 	}
 }
 
+func TestCBZCommunityRatingCanBeCleared(t *testing.T) {
+	filename := filepath.Join(t.TempDir(), "rated.cbz")
+	writeZipFixture(t, filename, map[string][]byte{
+		"ComicInfo.xml": []byte(`<ComicInfo><Title>Book</Title><CommunityRating>4.5</CommunityRating></ComicInfo>`),
+	})
+	if err := Write(context.Background(), filename, map[string]any{"rating": ""}); err != nil {
+		t.Fatalf("Write() clearing rating: %v", err)
+	}
+	values, err := comicInfoElementValues(t, filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := values["CommunityRating"]; exists {
+		t.Fatalf("CommunityRating remains after clearing: %v", values["CommunityRating"])
+	}
+}
+
 func assertComicInfoElementsInSchemaOrder(t *testing.T, filename string, want []string) {
 	t.Helper()
 	got, err := comicInfoElementNames(t, filename)

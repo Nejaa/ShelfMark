@@ -40,6 +40,7 @@ func createTempPath(filename string) (string, error) {
 	return name, nil
 }
 
+// base64Decode centralizes archive payload decoding for cover replacement helpers.
 func base64Decode(value string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(value)
 }
@@ -50,8 +51,10 @@ func base64Decode(value string) ([]byte, error) {
 // The fallback is recoverable but has a brief gap in which the path is absent.
 func replaceFile(temp, filename string) error {
 	slog.Debug("replacing book file", "path", filename)
+
 	replaceMu.Lock()
 	defer replaceMu.Unlock()
+
 	info, err := os.Stat(filename)
 	if err != nil {
 		return err
@@ -102,8 +105,10 @@ func writeXMLAtomic(filename string, doc *etree.Document) error {
 	}
 
 	temp := file.Name()
+
 	// A failed write leaves the original untouched; removal is best-effort cleanup.
 	defer func() { _ = os.Remove(temp) }()
+
 	doc.Indent(2)
 	if _, err = doc.WriteTo(file); err != nil {
 		_ = file.Close()

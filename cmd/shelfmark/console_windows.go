@@ -39,6 +39,8 @@ func consoleOutput() io.Writer {
 	return nil
 }
 
+// usableHandle returns a standard handle only when it still points at a real file,
+// pipe, or console after AttachConsole has adjusted the process handles.
 func usableHandle(kind uint32) windows.Handle {
 	handle, err := windows.GetStdHandle(kind)
 	if err != nil || handle == 0 || handle == windows.InvalidHandle {
@@ -52,17 +54,20 @@ func usableHandle(kind uint32) windows.Handle {
 	return handle
 }
 
-// AttachConsole resets handlers registered by the Go runtime before main.
+// interruptContext compensates for AttachConsole resetting handlers registered
+// by the Go runtime before main.
 // Install our own Ctrl+C/Ctrl+Break callback after attachment so terminal
 // interrupts still cancel the server and let it shut down cleanly.
 func interruptContext(parent context.Context) (context.Context, context.CancelFunc) {
 	ctx, cancel := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	ctx, stop := context.WithCancel(ctx)
+
 	callback := syscall.NewCallback(func(event uint32) uintptr {
 		if event == windows.CTRL_C_EVENT || event == windows.CTRL_BREAK_EVENT {
 			stop()
 			return 1
 		}
+
 		return 0
 	})
 	_, _, _ = setConsoleCtrlHandler.Call(callback, 1)

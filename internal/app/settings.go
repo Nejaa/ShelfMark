@@ -12,9 +12,11 @@ import (
 	"shelfmark/internal/settings"
 )
 
+// settings serves current preferences and applies partial updates from the UI.
 func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 	s.operations.Lock()
 	defer s.operations.Unlock()
+
 	prefs, err := settings.Load(r.Context(), s.db)
 	if err != nil {
 		jsonError(w, err)
@@ -28,7 +30,6 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, err)
 			return
 		}
-
 		if !strings.HasPrefix(strings.TrimSpace(string(patch)), "{") {
 			jsonError(w, fmt.Errorf("settings must be an object"))
 			return
@@ -56,6 +57,7 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 		if _, changed := fields["log_level"]; changed && s.logLevel != nil {
 			s.logLevel.Set(prefs.LogLevel)
 		}
+
 		slog.Info("settings updated", "saved_log_level", prefs.LogLevel.String(), "inspect_content", prefs.InspectContent, "ocr", prefs.OCR)
 		if prefs.InspectContent && prefs.OCR {
 			metadata.CheckOCR(r.Context())
@@ -69,6 +71,7 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 	}
 	configured := prefs.GoogleBooksAPIKey != ""
 	prefs.GoogleBooksAPIKey = ""
+
 	jsonOut(w, struct {
 		settings.Preferences
 		KeyConfigured bool               `json:"google_books_api_key_configured"`

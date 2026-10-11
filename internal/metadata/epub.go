@@ -12,6 +12,20 @@ import (
 	"github.com/beevik/etree"
 )
 
+var calibreMetaFields = map[string]string{
+	"calibre:series":         "series",
+	"calibre:series_index":   "series_index",
+	"calibre:subtitle":       "subtitle",
+	"calibre:original_title": "original_title",
+	"calibre:edition":        "edition",
+	"calibre:collection":     "collection",
+	"calibre:rating":         "rating",
+	"calibre:identifiers":    "identifiers",
+	"calibre:catalog_url":    "catalog_url",
+}
+
+// readEPUBFile reads Dublin Core metadata plus Calibre-specific extensions
+// commonly used to store series and related ebook fields.
 func readEPUBFile(filename string) (map[string]any, error) {
 	archive, err := zip.OpenReader(filename)
 	if err != nil {
@@ -23,6 +37,7 @@ func readEPUBFile(filename string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	meta := root.FindElement("./metadata")
 	if meta == nil {
 		return nil, fmt.Errorf("EPUB package is missing metadata")
@@ -52,33 +67,16 @@ func readEPUBFile(filename string) (map[string]any, error) {
 			continue
 		}
 
-		name := node.SelectAttrValue("name", "")
-		value := node.SelectAttrValue("content", "")
-		switch name {
-		case "calibre:series":
-			out["series"] = value
-		case "calibre:series_index":
-			out["series_index"] = value
-		case "calibre:subtitle":
-			out["subtitle"] = value
-		case "calibre:original_title":
-			out["original_title"] = value
-		case "calibre:edition":
-			out["edition"] = value
-		case "calibre:collection":
-			out["collection"] = value
-		case "calibre:rating":
-			out["rating"] = value
-		case "calibre:identifiers":
-			out["identifiers"] = value
-		case "calibre:catalog_url":
-			out["catalog_url"] = value
+		if field, ok := calibreMetaFields[node.SelectAttrValue("name", "")]; ok {
+			out[field] = node.SelectAttrValue("content", "")
 		}
 	}
 
 	return out, nil
 }
 
+// writeEPUBFile patches the OPF package and optional cover while leaving all
+// other archive members and their ordering untouched.
 func writeEPUBFile(ctx context.Context, filename string, fields map[string]any) error {
 	archive, err := zip.OpenReader(filename)
 	if err != nil {
@@ -86,6 +84,7 @@ func writeEPUBFile(ctx context.Context, filename string, fields map[string]any) 
 	}
 
 	defer func() { _ = archive.Close() }()
+
 	opf, root, err := epubPackage(archive.File)
 	if err != nil {
 		return err
@@ -96,7 +95,6 @@ func writeEPUBFile(ctx context.Context, filename string, fields map[string]any) 
 		return fmt.Errorf("EPUB package is missing metadata")
 	}
 
-	// Locate an existing EPUB 2/3 cover or add a new manifest entry.
 	coverData, coverType, coverMember := "", "", ""
 	if value := Text(fields["cover_url"]); value != "" {
 		coverData, coverType, err = downloadCover(ctx, value)
@@ -104,41 +102,90 @@ func writeEPUBFile(ctx context.Context, filename string, fields map[string]any) 
 			return err
 		}
 
-		manifest := root.FindElement("./manifest")
-		if manifest == nil {
-			return fmt.Errorf("EPUB package is missing manifest")
+		coverMember, err = prepareEPUBCover(root, meta, opf, coverType)
+		if err != nil {
+			return err
 		}
-
-		items := manifest.FindElements("./item")
-		var cover *etree.Element
-		legacy := ""
-		for _, m := range meta.FindElements("./meta") {
-			if m.SelectAttrValue("name", "") == "cover" {
-				legacy = m.SelectAttrValue("content", "")
-			}
-		}
-
-		for _, item := range items {
-			props := strings.Fields(item.SelectAttrValue("properties", ""))
-			if contains(props, "cover-image") || item.SelectAttrValue("id", "") == legacy {
-				cover = item
-				break
-			}
-		}
-
-		if cover == nil {
-			cover = manifest.CreateElement("item")
-			cover.CreateAttr("id", "shelfmark-cover")
-			cover.CreateAttr("href", "shelfmark-cover."+coverType)
-			cover.CreateAttr("media-type", coverMIME(coverType))
-			cover.CreateAttr("properties", "cover-image")
-		}
-
-		cover.CreateAttr("media-type", coverMIME(coverType))
-		coverMember = path.Join(path.Dir(opf), urlPath(cover.SelectAttrValue("href", "")))
 	}
 
-	// Apply selected Dublin Core fields, preserving unrelated package metadata.
+	applyEPUBFields(root, meta, fields)
+
+	// Copy untouched members as compressed bytes. Rewrite only the OPF and
+	// selected cover, preserving archive order and the EPUB mimetype entry.
+	out, err := createTempFile(filename)
+	if err != nil {
+		return err
+	}
+
+	tmp := out.Name()
+	defer func() { _ = os.Remove(tmp) }()
+
+	writer := zip.NewWriter(out)
+	if err = copyEPUBMembers(ctx, writer, archive, opf, root, coverData, coverMember); err != nil {
+		_ = writer.Close()
+		_ = out.Close()
+		return err
+	}
+
+	if err = writer.Close(); err != nil {
+		_ = out.Close()
+		return err
+	}
+
+	if err = out.Close(); err != nil {
+		return err
+	}
+
+	// Release the original file handle before replacing it on Windows.
+	if err := archive.Close(); err != nil {
+		return err
+	}
+
+	return replaceFile(tmp, filename)
+}
+
+// prepareEPUBCover locates an existing EPUB 2/3 cover or adds a manifest entry,
+// and returns the archive member that must hold the new image.
+func prepareEPUBCover(root, meta *etree.Element, opf, coverType string) (string, error) {
+	manifest := root.FindElement("./manifest")
+	if manifest == nil {
+		return "", fmt.Errorf("EPUB package is missing manifest")
+	}
+
+	legacy := ""
+	for _, m := range meta.FindElements("./meta") {
+		if m.SelectAttrValue("name", "") == "cover" {
+			legacy = m.SelectAttrValue("content", "")
+		}
+	}
+
+	var cover *etree.Element
+	items := manifest.FindElements("./item")
+	for _, item := range items {
+		props := strings.Fields(item.SelectAttrValue("properties", ""))
+		if contains(props, "cover-image") || item.SelectAttrValue("id", "") == legacy {
+			cover = item
+			break
+		}
+	}
+
+	if cover == nil {
+		cover = manifest.CreateElement("item")
+		cover.CreateAttr("id", "shelfmark-cover")
+		cover.CreateAttr("href", "shelfmark-cover."+coverType)
+		cover.CreateAttr("media-type", coverMIME(coverType))
+		cover.CreateAttr("properties", "cover-image")
+	}
+
+	cover.CreateAttr("media-type", coverMIME(coverType))
+
+	return path.Join(path.Dir(opf), urlPath(cover.SelectAttrValue("href", ""))), nil
+}
+
+// applyEPUBFields updates selected package metadata, preserving unrelated entries.
+func applyEPUBFields(root, meta *etree.Element, fields map[string]any) {
+	epub3 := strings.HasPrefix(root.SelectAttrValue("version", ""), "3")
+
 	for key, tag := range map[string]string{
 		"title":     "dc:title",
 		"publisher": "dc:publisher",
@@ -158,33 +205,11 @@ func writeEPUBFile(ctx context.Context, filename string, fields map[string]any) 
 	}
 
 	if values, ok := fields["authors"]; ok {
-		replaceEPUBContributors(meta, "aut", Strings(values), strings.HasPrefix(root.SelectAttrValue("version", ""), "3"))
+		replaceEPUBContributors(meta, "aut", Strings(values), epub3)
 	}
 
-	// Change ISBN identifiers without deleting other identifier schemes.
 	if value, ok := fields["isbn"]; ok {
-		ids := meta.FindElements("./identifier")
-		var node *etree.Element
-		for _, id := range ids {
-			if len(ISBNs(id.Text())) > 0 || strings.EqualFold(id.SelectAttrValue("scheme", ""), "isbn") {
-				node = id
-				break
-			}
-		}
-
-		if Text(value) == "" {
-			for _, id := range ids {
-				if len(ISBNs(id.Text())) > 0 || strings.EqualFold(id.SelectAttrValue("scheme", ""), "isbn") {
-					meta.RemoveChild(id)
-				}
-			}
-		} else {
-			if node == nil {
-				node = meta.CreateElement("dc:identifier")
-				node.CreateAttr("opf:scheme", "ISBN")
-			}
-			node.SetText("ISBN:" + Text(value))
-		}
+		applyEPUBISBN(meta, Text(value))
 	}
 
 	for _, key := range []string{
@@ -204,110 +229,111 @@ func writeEPUBFile(ctx context.Context, filename string, fields map[string]any) 
 	}
 
 	if values, ok := fields["translators"]; ok {
-		replaceEPUBContributors(meta, "trl", Strings(values), strings.HasPrefix(root.SelectAttrValue("version", ""), "3"))
+		replaceEPUBContributors(meta, "trl", Strings(values), epub3)
+	}
+}
+
+// isISBNIdentifier recognizes both explicit scheme markers and raw ISBN text.
+func isISBNIdentifier(id *etree.Element) bool {
+	return len(ISBNs(id.Text())) > 0 || strings.EqualFold(id.SelectAttrValue("scheme", ""), "isbn")
+}
+
+// applyEPUBISBN changes ISBN identifiers without deleting other identifier schemes.
+func applyEPUBISBN(meta *etree.Element, value string) {
+	ids := meta.FindElements("./identifier")
+	if value == "" {
+		for _, id := range ids {
+			if isISBNIdentifier(id) {
+				meta.RemoveChild(id)
+			}
+		}
+		return
 	}
 
-	// Copy untouched members as compressed bytes. Rewrite only the OPF and
-	// selected cover, preserving archive order and the EPUB mimetype entry.
-	out, err := createTempFile(filename)
-	if err != nil {
-		return err
+	var node *etree.Element
+	for _, id := range ids {
+		if isISBNIdentifier(id) {
+			node = id
+			break
+		}
 	}
 
-	tmp := out.Name()
-	defer func() { _ = os.Remove(tmp) }()
-	writer := zip.NewWriter(out)
+	if node == nil {
+		node = meta.CreateElement("dc:identifier")
+		node.CreateAttr("opf:scheme", "ISBN")
+	}
+
+	node.SetText("ISBN:" + value)
+}
+
+// copyEPUBMembers streams the original archive, replacing only the OPF package
+// and selected cover image so recompression stays localized.
+func copyEPUBMembers(ctx context.Context, writer *zip.Writer, archive *zip.ReadCloser, opf string, root *etree.Element, coverData, coverMember string) error {
 	found := false
 	for _, item := range archive.File {
 		if err := ctx.Err(); err != nil {
-			_ = writer.Close()
-			_ = out.Close()
 			return err
 		}
 
 		if item.Name != opf && (coverData == "" || item.Name != coverMember) {
 			if err := copyZIPMember(writer, item); err != nil {
-				_ = writer.Close()
-				_ = out.Close()
 				return err
 			}
+
 			continue
 		}
 
-		reader, e := item.Open()
-		if e != nil {
-			_ = writer.Close()
-			_ = out.Close()
-			return e
+		isCover := coverData != "" && item.Name == coverMember
+		if err := rewriteEPUBMember(writer, item, opf, root, coverData, isCover); err != nil {
+			return err
 		}
 
-		data, e := io.ReadAll(reader)
-		_ = reader.Close()
-		if e != nil {
-			_ = writer.Close()
-			_ = out.Close()
-			return e
-		}
-
-		if item.Name == opf {
-			doc := etree.NewDocument()
-			doc.SetRoot(root)
-			data, err = doc.WriteToBytes()
-			if err != nil {
-				_ = writer.Close()
-				_ = out.Close()
-				return err
-			}
-		}
-
-		if coverData != "" && item.Name == coverMember {
-			data, _ = base64Decode(coverData)
-			found = true
-		}
-
-		header := item.FileHeader
-		dst, e := writer.CreateHeader(&header)
-		if e == nil {
-			_, e = dst.Write(data)
-		}
-
-		if e != nil {
-			_ = writer.Close()
-			_ = out.Close()
-			return e
-		}
+		found = found || isCover
 	}
 
 	if coverData != "" && !found {
 		data, _ := base64Decode(coverData)
 		dst, err := writer.Create(coverMember)
 		if err != nil {
-			_ = writer.Close()
-			_ = out.Close()
 			return err
 		}
 
 		_, err = dst.Write(data)
+		return err
+	}
+	return nil
+}
+
+// rewriteEPUBMember materializes one replaced member while preserving its header metadata.
+func rewriteEPUBMember(writer *zip.Writer, item *zip.File, opf string, root *etree.Element, coverData string, isCover bool) error {
+	reader, err := item.Open()
+	if err != nil {
+		return err
+	}
+
+	data, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil {
+		return err
+	}
+
+	if item.Name == opf {
+		doc := etree.NewDocument()
+		doc.SetRoot(root)
+		data, err = doc.WriteToBytes()
 		if err != nil {
-			_ = writer.Close()
-			_ = out.Close()
 			return err
 		}
 	}
 
-	if err = writer.Close(); err != nil {
-		_ = out.Close()
-		return err
+	if isCover {
+		data, _ = base64Decode(coverData)
 	}
 
-	if err = out.Close(); err != nil {
-		return err
+	header := item.FileHeader
+	dst, err := writer.CreateHeader(&header)
+	if err == nil {
+		_, err = dst.Write(data)
 	}
-
-	// Release the original file handle before replacing it on Windows.
-	if err := archive.Close(); err != nil {
-		return err
-	}
-
-	return replaceFile(tmp, filename)
+	return err
 }

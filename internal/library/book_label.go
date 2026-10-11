@@ -17,8 +17,13 @@ var (
 // An unlabelled number is interpreted as a volume only for an already known
 // series, so titles such as "Catch 22" do not become invented series metadata.
 type BookLabel struct {
-	Title  string
+	// Title is the title text remaining after series and volume clues are removed.
+	Title string
+
+	// Series is the detected series label when the filename or metadata implies one.
 	Series string
+
+	// Volume is the normalized series number, using dots as decimal separators.
 	Volume string
 }
 
@@ -26,27 +31,34 @@ type BookLabel struct {
 // Translated leading articles are ignored when comparing known series names.
 func ClassifyBookLabel(value, knownSeries string) BookLabel {
 	value = strings.TrimSpace(value)
+
 	if match := numberedLabel.FindStringSubmatch(value); match != nil {
 		return BookLabel{Title: strings.TrimSpace(match[3]), Series: strings.Trim(match[1], " -:"), Volume: strings.ReplaceAll(match[2], ",", ".")}
 	}
+
 	if match := bareNumberedLabel.FindStringSubmatch(strings.TrimRight(value, ".")); match != nil && knownSeries != "" && seriesKey(match[1]) == seriesKey(knownSeries) {
 		return BookLabel{Title: strings.TrimSpace(match[3]), Series: knownSeries, Volume: strings.ReplaceAll(match[2], ",", ".")}
 	}
+
 	if knownSeries != "" && seriesKey(value) == seriesKey(knownSeries) {
 		return BookLabel{Series: knownSeries}
 	}
+
 	return BookLabel{Title: value}
 }
 
+// seriesKey compares candidate series names without leading articles that often vary between filenames and metadata.
 func seriesKey(value string) string {
 	value = NormalizeSearchText(value)
 	words := strings.Fields(value)
+
 	if len(words) > 1 {
 		switch words[0] {
 		case "the", "a", "an", "les", "le", "la", "l", "un", "une":
 			words = words[1:]
 		}
 	}
+
 	return strings.Join(words, " ")
 }
 
@@ -58,6 +70,7 @@ func seriesKey(value string) string {
 func FilenameBookLabel(filename string, identity SearchIdentity) BookLabel {
 	filename = strings.TrimSuffix(filename, filepath.Ext(filename))
 	filename = strings.NewReplacer("_", " ", " – ", " - ", " — ", " - ").Replace(filename)
+
 	for _, author := range identity.Authors {
 		parts := strings.Split(filename, " - ")
 		var remaining []string
@@ -66,17 +79,20 @@ func FilenameBookLabel(filename string, identity SearchIdentity) BookLabel {
 				remaining = append(remaining, part)
 			}
 		}
+
 		filename = strings.Join(remaining, " - ")
 	}
+
 	filename = fileNoise.ReplaceAllString(filename, " ")
 	parts := strings.Split(filename, " - ")
 	if len(parts) >= 3 && filenameVolume.MatchString(strings.TrimSpace(parts[1])) {
 		series := strings.TrimSpace(parts[0])
-		title := strings.TrimSpace(strings.Join(parts[2:], " - "))
+		title := strings.Trim(strings.TrimSpace(strings.Join(parts[2:], " - ")), " -:–—")
 		if series != "" && title != "" {
 			volume, _ := strconv.ParseFloat(strings.ReplaceAll(strings.TrimSpace(parts[1]), ",", "."), 64)
 			return BookLabel{Title: title, Series: series, Volume: strconv.FormatFloat(volume, 'f', -1, 64)}
 		}
 	}
+
 	return ClassifyBookLabel(filename, identity.Series)
 }

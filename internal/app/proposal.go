@@ -11,6 +11,7 @@ import (
 	"shelfmark/internal/metadata"
 )
 
+// proposalField describes one editable field in the proposal/review UI.
 type proposalField struct {
 	Name           string `json:"name"`
 	Current        string `json:"current"`
@@ -53,12 +54,29 @@ func (s *Server) proposal(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Debug("metadata proposal reconciled", "path", path, "evidence", resolution.Evidence, "review_fields", resolution.Review)
 	proposed := resolution.Values
+
 	edits, err := library.ParseInputs(in.Values)
 	if err != nil {
 		jsonError(w, err)
 		return
 	}
+
 	proposed = library.Working(proposed, edits)
+	fields, err := buildProposalFields(path, current, proposed, resolution, in.Values)
+	if err != nil {
+		jsonError(w, err)
+		return
+	}
+	notes := ""
+	if in.Candidate != nil {
+		notes = in.Candidate.SourceNotes
+	}
+	jsonOut(w, map[string]any{"fields": fields, "notes": notes, "cover_editable": metadata.ValidateFields(path, map[string]any{"cover_url": "https://example.org/cover"}) == nil})
+}
+
+// buildProposalFields normalizes proposal values into stable editor rows and
+// recomputes support/review flags from the final, merged field values.
+func buildProposalFields(path string, current, proposed map[string]any, resolution catalog.MetadataProposal, edits map[string]string) ([]proposalField, error) {
 	fields := make([]proposalField, 0)
 	for _, name := range library.FieldNames() {
 		if proposed[name] == nil {
@@ -69,25 +87,23 @@ func (s *Server) proposal(w http.ResponseWriter, r *http.Request) {
 				proposed[name] = ""
 			}
 		}
-		changed := !library.Equal(current[name], proposed[name])
-		supported := metadata.ValidateFields(path, map[string]any{name: proposed[name]}) == nil
-		_, edited := in.Values[name]
+
 		evidence := resolution.Evidence[name]
-		review := resolution.Review[name] && !edited
+		_, edited := edits[name]
 		if edited {
 			evidence = "Manual edit"
 		}
+
 		inputValue, err := library.InputText(name, proposed[name])
 		if err != nil {
-			jsonError(w, err)
-			return
+			return nil, err
 		}
+
+		supported := metadata.ValidateFields(path, map[string]any{name: proposed[name]}) == nil
+		changed := !library.Equal(current[name], proposed[name])
+		review := resolution.Review[name] && !edited
 		fields = append(fields, proposalField{Evidence: evidence, ReviewRequired: review, Name: name, Current: library.Text(current[name]), Value: inputValue,
 			Changed: changed, Supported: supported, Suggested: changed && supported && !review && (edited || library.Text(proposed[name]) != "" || (name == "subtitle" && evidence != ""))})
 	}
-	notes := ""
-	if in.Candidate != nil {
-		notes = in.Candidate.SourceNotes
-	}
-	jsonOut(w, map[string]any{"fields": fields, "notes": notes, "cover_editable": metadata.ValidateFields(path, map[string]any{"cover_url": "https://example.org/cover"}) == nil})
+	return fields, nil
 }

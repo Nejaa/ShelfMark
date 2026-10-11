@@ -23,6 +23,7 @@ func TestValidateFieldsEnforcesFormatCapabilities(t *testing.T) {
 		{name: "CBZ language uses BCP 47 tag", path: "book.cbz", fields: map[string]any{"languages": []string{"zh-Hant"}}},
 		{name: "CBZ language only allows one tag", path: "book.cbz", fields: map[string]any{"languages": []string{"en", "fr"}}, wantErr: "supports one language tag"},
 		{name: "CBZ rating follows ComicInfo bounds", path: "book.cbz", fields: map[string]any{"rating": "4.5"}},
+		{name: "CBZ rating can be cleared", path: "book.cbz", fields: map[string]any{"rating": ""}},
 		{name: "CBZ rating over five rejected", path: "book.cbz", fields: map[string]any{"rating": "5.01"}, wantErr: "between 0 and 5"},
 		{name: "cover only supported for EPUB", path: "book.cbz", fields: map[string]any{"cover_url": "https://example.org/cover.jpg"}, wantErr: "cover writing requires an EPUB"},
 		{name: "unknown field rejected", path: "book.fb2", fields: map[string]any{"unknown": "x"}, wantErr: "unknown metadata field"},

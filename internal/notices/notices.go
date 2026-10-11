@@ -19,17 +19,21 @@ func Read(name string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open notices: %w", err)
 	}
+
 	defer func() { _ = reader.Close() }() // Closing an in-memory reader cannot fail.
+
 	archive := tar.NewReader(reader)
 	for {
 		entry, err := archive.Next()
 		if err != nil {
 			return nil, fmt.Errorf("read notice %q: %w", name, err)
 		}
+
 		if entry.Name == name && entry.Typeflag == tar.TypeReg {
 			if entry.Size > 2<<20 {
 				return nil, fmt.Errorf("notice %q exceeds size limit", name)
 			}
+
 			return io.ReadAll(archive)
 		}
 	}

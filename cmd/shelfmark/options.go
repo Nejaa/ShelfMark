@@ -17,6 +17,7 @@ type options struct {
 	logLevelSet bool
 }
 
+// parseOptions keeps only process-start concerns; mutable preferences live in Settings.
 func parseOptions(programDir string) (options, error) {
 	var opts options
 	flags := flag.NewFlagSet("shelfmark", flag.ContinueOnError)
@@ -34,6 +35,7 @@ func parseOptions(programDir string) (options, error) {
 			opts.logLevelSet = true
 		}
 	})
+
 	if opts.dataDir == "" {
 		opts.dataDir = programDir
 	}
@@ -41,13 +43,16 @@ func parseOptions(programDir string) (options, error) {
 	if err != nil {
 		return opts, err
 	}
+
 	level = strings.ToLower(strings.TrimSpace(level))
 	if err := opts.logLevel.UnmarshalText([]byte(strings.ToUpper(level))); err != nil {
 		return opts, fmt.Errorf("invalid log level %q: use debug, info, warn, or error", level)
 	}
+
 	// Accept the documented levels, rather than slog's numeric offsets.
 	if level != "debug" && level != "info" && level != "warn" && level != "error" {
 		return opts, fmt.Errorf("invalid log level %q: use debug, info, warn, or error", level)
 	}
+
 	return opts, nil
 }
