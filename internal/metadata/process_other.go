@@ -4,4 +4,7 @@ package metadata
 
 import "os/exec"
 
-func configureCommand(_ *exec.Cmd) {}
+// configureCommand leaves non-Windows OCR processes with default attributes.
+func configureCommand(_ *exec.Cmd) {
+	// Only Windows needs process attributes, such as hiding console windows.
+}

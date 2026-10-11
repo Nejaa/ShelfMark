@@ -44,6 +44,7 @@ type Server struct {
 	lastUIError    atomic.Int64
 }
 
+// book is the per-title API model shared by scan, draft, and search responses.
 type book struct {
 	ID            string         `json:"id"`
 	Path          string         `json:"path"`
@@ -77,36 +78,48 @@ func New(db Repository, searcher CatalogSearcher, options ...Option) *Server {
 		searches: make(chan struct{}, 2),
 		catalog:  searcher,
 	}
+
 	for _, option := range options {
 		option(server)
 	}
+
 	return server
 }
 
 // Handler serves the embedded SPA and JSON API with shared request limits.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+
 	mux.Handle("GET /", http.FileServerFS(webui.Files))
+
 	mux.HandleFunc("GET /api/licenses", s.licenseArchive)
 	mux.HandleFunc("GET /api/webview2-license", s.webviewLicense)
+
 	mux.HandleFunc("GET /api/settings", s.settings)
 	mux.HandleFunc("POST /api/settings", s.settings)
+
 	mux.HandleFunc("POST /api/browse", s.browse)
 	mux.HandleFunc("POST /api/scan", s.scan)
 	mux.HandleFunc("POST /api/library", s.libraryView)
 	mux.HandleFunc("POST /api/proposal", s.proposal)
+
 	mux.HandleFunc("POST /api/background/start", s.startBackground)
 	mux.HandleFunc("POST /api/background/cancel", s.cancelBackground)
 	mux.HandleFunc("GET /api/background", s.backgroundStatus)
+
 	mux.HandleFunc("POST /api/cover", s.cover)
+
 	mux.HandleFunc("POST /api/search", s.search)
 	mux.HandleFunc("POST /api/search/cached", s.cachedSearch)
+
 	mux.HandleFunc("POST /api/ui-error", s.uiError)
+
 	mux.HandleFunc("POST /api/apply", s.apply)
 	mux.HandleFunc("POST /api/staged-count", s.stagedCount)
 	mux.HandleFunc("POST /api/staged", s.staged)
 	mux.HandleFunc("POST /api/save", s.save)
 	mux.HandleFunc("POST /api/drafts/discard", s.discardDrafts)
+
 	return withRequestLogging(withSecurityHeaders(http.MaxBytesHandler(mux, 2<<20)))
 }
 
@@ -116,24 +129,11 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			w.Header().Set("Cache-Control", "no-store")
-			if origin := r.Header.Get("Origin"); origin != "" {
-				u, err := url.Parse(origin)
-				if err != nil || u.Host != r.Host || (u.Scheme != "http" && u.Scheme != "https") {
-					writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin requests are not allowed"})
-					return
-				}
-			}
-
-			if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
-				writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-site requests are not allowed"})
-				return
-			}
-
-			mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
-			if r.Method == http.MethodPost && mediaType != "application/json" {
-				writeJSON(w, http.StatusUnsupportedMediaType, map[string]string{"error": "Content-Type must be application/json"})
+			if status, message := apiRequestError(r); status != 0 {
+				writeJSON(w, status, map[string]string{"error": message})
 				return
 			}
 		}
@@ -142,22 +142,50 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 	})
 }
 
+// apiRequestError enforces the API's same-origin and JSON-only request contract.
+func apiRequestError(r *http.Request) (int, string) {
+	if origin := r.Header.Get("Origin"); origin != "" && !sameOrigin(origin, r.Host) {
+		return http.StatusForbidden, "cross-origin requests are not allowed"
+	}
+
+	if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+		return http.StatusForbidden, "cross-site requests are not allowed"
+	}
+
+	mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if r.Method == http.MethodPost && mediaType != "application/json" {
+		return http.StatusUnsupportedMediaType, "Content-Type must be application/json"
+	}
+
+	return 0, ""
+}
+
+// sameOrigin accepts only the loopback UI origin that served the page.
+func sameOrigin(origin, host string) bool {
+	u, err := url.Parse(origin)
+	return err == nil && u.Host == host && (u.Scheme == "http" || u.Scheme == "https")
+}
+
+// jsonOut writes a successful JSON response with the shared API encoding.
 func jsonOut(w http.ResponseWriter, v any) {
 	writeJSON(w, http.StatusOK, v)
 }
 
+// writeJSON centralizes content type and status handling for all JSON responses.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// jsonError maps common local-file failures onto HTTP status codes for the SPA.
 func jsonError(w http.ResponseWriter, err error) {
 	if errors.Is(err, context.Canceled) {
 		slog.Debug("API operation canceled")
 	} else {
 		slog.Warn("API operation failed", "error", err)
 	}
+
 	status := http.StatusBadRequest
 	var oversized *http.MaxBytesError
 	switch {
@@ -177,6 +205,7 @@ func jsonError(w http.ResponseWriter, err error) {
 // decode accepts exactly one JSON value and rejects unknown request fields.
 func decode(r *http.Request, dst any) error {
 	defer func() { _ = r.Body.Close() }()
+
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(dst); err != nil {

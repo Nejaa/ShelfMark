@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -62,7 +63,7 @@ func TestExtractHonorsCancellation(t *testing.T) {
 	payload = ocrArchive(t, []archiveEntry{{name: "model", data: []byte("model")}})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := extract(ctx, t.TempDir()); err != context.Canceled {
+	if err := extract(ctx, t.TempDir()); !errors.Is(err, context.Canceled) {
 		t.Fatalf("extract() error = %v, want context.Canceled", err)
 	}
 }

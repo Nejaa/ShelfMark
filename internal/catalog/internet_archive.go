@@ -7,8 +7,10 @@ import (
 	"shelfmark/internal/library"
 )
 
+// internetArchive adapts ShelfMark queries to the Internet Archive advanced search API.
 func (s *Service) internetArchive(ctx context.Context, query searchQuery) ([]Candidate, error) {
 	q := queryText(query)
+
 	if query.ISBN != "" {
 		q = "isbn:" + quoteQuery(query.ISBN)
 	} else if query.Title != "" {
@@ -17,12 +19,14 @@ func (s *Service) internetArchive(ctx context.Context, query searchQuery) ([]Can
 			q += " AND creator:" + quoteQuery(query.Author)
 		}
 	}
+
 	params := url.Values{
 		"q":      {q},
 		"fl[]":   {"identifier,title,creator,year,language,description,isbn"},
 		"rows":   {"12"},
 		"output": {"json"},
 	}
+
 	var data struct {
 		Response struct {
 			Docs []struct {
@@ -36,11 +40,13 @@ func (s *Service) internetArchive(ctx context.Context, query searchQuery) ([]Can
 			} `json:"docs"`
 		} `json:"response"`
 	}
+
 	if err := s.getJSON(ctx, "https://archive.org/advancedsearch.php?"+params.Encode(), &data); err != nil {
 		return nil, err
 	}
 
 	var out []Candidate
+
 	for _, doc := range data.Response.Docs {
 		if doc.ID == "" || doc.Title == "" {
 			continue

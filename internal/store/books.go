@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"maps"
 	"time"
 
 	"shelfmark/internal/library"
@@ -39,9 +40,7 @@ func (s *Store) ReadBook(ctx context.Context, path, fingerprint string, current 
 
 	staged = library.Changes(current, staged)
 	working := clone(current)
-	for k, v := range staged {
-		working[k] = v
-	}
+	maps.Copy(working, staged)
 
 	err = s.persistBook(ctx, path, fingerprint, current, staged)
 	return working, len(staged) > 0, err
@@ -121,6 +120,7 @@ func (s *Store) DiscardDrafts(ctx context.Context, paths []string) error {
 	if err != nil {
 		return err
 	}
+
 	defer func() { _ = tx.Rollback() }()
 
 	for _, path := range paths {
@@ -139,6 +139,7 @@ func (s *Store) FinishSave(ctx context.Context, path, fingerprint string, fileMe
 	return s.persistBook(ctx, path, fingerprint, fileMetadata, remaining)
 }
 
+// persistBook stores the observed file metadata alongside only the remaining draft patch.
 func (s *Store) persistBook(ctx context.Context, path, fingerprint string, current, changes map[string]any) error {
 	metadataJSON, err := json.Marshal(current)
 	if err != nil {
@@ -162,10 +163,9 @@ func (s *Store) persistBook(ctx context.Context, path, fingerprint string, curre
 	return err
 }
 
+// clone copies a metadata map so callers can layer staged values without mutating their inputs.
 func clone(src map[string]any) map[string]any {
 	dst := make(map[string]any, len(src))
-	for k, v := range src {
-		dst[k] = v
-	}
+	maps.Copy(dst, src)
 	return dst
 }

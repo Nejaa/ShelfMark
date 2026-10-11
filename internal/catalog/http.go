@@ -17,6 +17,7 @@ import (
 // Rechecking after each wait handles competing callers and cancellation.
 func (s *Service) throttle(ctx context.Context) {
 	background, _ := ctx.Value(priorityContextKey{}).(bool)
+
 	for {
 		s.mu.Lock()
 		if background && s.manualWaiting > 0 {
@@ -24,6 +25,7 @@ func (s *Service) throttle(ctx context.Context) {
 			if !pause(ctx, 100*time.Millisecond) {
 				return
 			}
+
 			continue
 		}
 
@@ -41,9 +43,11 @@ func (s *Service) throttle(ctx context.Context) {
 	}
 }
 
+// pause waits for the next throttle window unless the caller cancels first.
 func pause(ctx context.Context, duration time.Duration) bool {
 	timer := time.NewTimer(duration)
 	defer timer.Stop()
+
 	select {
 	case <-ctx.Done():
 		return false
@@ -52,13 +56,16 @@ func pause(ctx context.Context, duration time.Duration) bool {
 	}
 }
 
+// catalogHTTPError preserves provider status codes for callers that can recover from them.
 type catalogHTTPError struct {
 	StatusCode int
 	Status     string
 }
 
+// Error formats the provider status without repeating the request URL.
 func (e *catalogHTTPError) Error() string { return "catalog returned " + e.Status }
 
+// getJSON applies shared throttling, logging, and size limits around catalog requests.
 func (s *Service) getJSON(ctx context.Context, raw string, dst any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
 	if err != nil {
@@ -67,8 +74,10 @@ func (s *Service) getJSON(ctx context.Context, raw string, dst any) error {
 
 	req.Header.Set("User-Agent", "Shelfmark/1.0 (local ebook metadata helper)")
 	slog.Debug("waiting for catalog request slot", "host", req.URL.Hostname())
+
 	s.throttle(ctx)
 	slog.Debug("sending catalog request", "host", req.URL.Hostname())
+
 	resp, err := s.http.Do(req)
 	if err != nil {
 		slog.Debug("catalog transport failed", "host", req.URL.Hostname(), "error_type", fmt.Sprintf("%T", err), "reason", requestFailure(err))
@@ -76,7 +85,9 @@ func (s *Service) getJSON(ctx context.Context, raw string, dst any) error {
 	}
 
 	defer func() { _ = resp.Body.Close() }()
+
 	slog.Debug("catalog HTTP response", "host", req.URL.Hostname(), "status", resp.StatusCode)
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		hint := "check catalog availability and try again later"
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
@@ -84,11 +95,13 @@ func (s *Service) getJSON(ctx context.Context, raw string, dst any) error {
 		} else if resp.StatusCode == http.StatusTooManyRequests {
 			hint = "catalog rate limit reached; increase the background delay in Settings and retry later"
 		}
+
 		if resp.StatusCode == http.StatusNotFound {
 			slog.Debug("catalog record not found", "host", req.URL.Hostname())
 		} else {
 			slog.Warn("catalog rejected request", "host", req.URL.Hostname(), "status", resp.StatusCode, "hint", hint)
 		}
+
 		return &catalogHTTPError{StatusCode: resp.StatusCode, Status: resp.Status}
 	}
 
@@ -96,6 +109,7 @@ func (s *Service) getJSON(ctx context.Context, raw string, dst any) error {
 	if err != nil {
 		slog.Warn("catalog response could not be decoded", "host", req.URL.Hostname(), "error_type", fmt.Sprintf("%T", err))
 	}
+
 	return err
 }
 
@@ -105,17 +119,19 @@ func requestFailure(err error) string {
 	if errors.Is(err, context.Canceled) {
 		return "canceled"
 	}
-	var dns *net.DNSError
-	if errors.As(err, &dns) {
+
+	if _, ok := errors.AsType[*net.DNSError](err); ok {
 		return "DNS resolution failed"
 	}
+
 	var network net.Error
 	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &network) && network.Timeout()) {
 		return "network timeout"
 	}
-	var connection *net.OpError
-	if errors.As(err, &connection) {
+
+	if _, ok := errors.AsType[*net.OpError](err); ok {
 		return "network connection failed"
 	}
+
 	return "HTTP transport failed"
 }

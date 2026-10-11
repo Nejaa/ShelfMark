@@ -11,6 +11,8 @@ import (
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 )
 
+// readPDFFile reads Shelfmark-managed PDF properties and falls back to filename
+// data because PDFs do not have a standard ebook metadata schema.
 func readPDFFile(filename string) (map[string]any, error) {
 	f, err := os.Open(filename)
 	if err != nil {
@@ -46,6 +48,8 @@ func readPDFFile(filename string) (map[string]any, error) {
 	}, nil
 }
 
+// writePDFFile updates only the custom properties Shelfmark understands, then
+// atomically replaces the original PDF.
 func writePDFFile(ctx context.Context, filename string, fields map[string]any) error {
 	properties := map[string]string{}
 	for key, pdfKey := range map[string]string{

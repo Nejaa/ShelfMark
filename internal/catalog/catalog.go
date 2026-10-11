@@ -79,8 +79,10 @@ type Service struct {
 	manualWaiting int
 }
 
+// priorityContextKey marks background searches so the throttle can yield to manual work.
 type priorityContextKey struct{}
 
+// namedProvider pairs user-facing provider names with search implementations.
 type namedProvider struct {
 	name   string
 	search func(context.Context, searchQuery) ([]Candidate, error)
@@ -111,88 +113,154 @@ func New() *Service {
 // Manual searches take priority over background requests at the shared throttle.
 func (s *Service) Search(ctx context.Context, request SearchRequest, prefs Options) Result {
 	result := Result{Candidates: []Candidate{}, Warnings: []string{}}
-	if request.Background {
-		ctx = context.WithValue(ctx, priorityContextKey{}, true)
-	} else {
-		s.mu.Lock()
-		s.manualWaiting++
-		s.mu.Unlock()
-		defer func() {
-			s.mu.Lock()
-			s.manualWaiting--
-			s.mu.Unlock()
-		}()
-	}
+
+	ctx, finish := s.beginSearch(ctx, request.Background)
+	defer finish()
 
 	queries := planSearch(request)
+	slog.Debug("catalog search plan", "queries", queries, "custom_query", request.CustomQuery)
+
+	providers := s.enabledProviders(prefs)
+
+	states := make(map[string]providerSearchState, len(providers))
 	found := make(map[string]Candidate)
-	failed := make(map[string]bool)
-	strong := make(map[string]bool)
-	exact := make(map[string]bool)
+	for _, q := range queries {
+		if ctx.Err() != nil {
+			break
+		}
+
+		for _, provider := range providers {
+			if ctx.Err() != nil {
+				break
+			}
+
+			state := states[provider.name]
+			if shouldSkipProvider(q, state) {
+				continue
+			}
+
+			s.lookupProvider(ctx, request, q, provider, &state, &result, found)
+			states[provider.name] = state
+		}
+	}
+
+	result.Candidates = finalizeCandidates(request, found, prefs.MaxCandidates)
+
+	return result
+}
+
+// providerSearchState records when a provider has already produced enough evidence for this search.
+type providerSearchState struct {
+	failed bool
+	strong bool
+	exact  bool
+}
+
+// beginSearch tracks manual waiters so background searches can defer politely.
+func (s *Service) beginSearch(ctx context.Context, background bool) (context.Context, func()) {
+	if background {
+		return context.WithValue(ctx, priorityContextKey{}, true), func() {
+			// Background searches do not increment manualWaiting, so there is nothing to decrement.
+		}
+	}
+
+	s.mu.Lock()
+	s.manualWaiting++
+	s.mu.Unlock()
+
+	return ctx, func() {
+		s.mu.Lock()
+		s.manualWaiting--
+		s.mu.Unlock()
+	}
+}
+
+// enabledProviders snapshots the currently enabled catalogs for this request.
+func (s *Service) enabledProviders(prefs Options) []namedProvider {
 	var providers []namedProvider
+
 	if prefs.GoogleBooks {
 		providers = append(providers, namedProvider{"Google Books", func(ctx context.Context, query searchQuery) ([]Candidate, error) {
 			return s.google(ctx, query, prefs.GoogleBooksAPIKey)
 		}})
 	}
+
 	if prefs.OpenLibrary {
 		providers = append(providers, namedProvider{"Open Library", s.openLibrary})
 	}
+
 	if prefs.InternetArchive {
 		providers = append(providers, namedProvider{"Internet Archive", s.internetArchive})
 	}
-	slog.Debug("catalog search plan", "queries", queries, "custom_query", request.CustomQuery)
 
-lookup:
-	for _, q := range queries {
-		for _, provider := range providers {
-			if ctx.Err() != nil {
-				break lookup
-			}
-			// Stop failed sources for this search, and broaden only sources whose
-			// constrained queries did not find a convincing bibliographic match.
-			if failed[provider.name] || exact[provider.name] || (q.Fallback && strong[provider.name]) {
-				continue
-			}
-			started := time.Now()
-			slog.Debug("catalog lookup started", "provider", provider.name, "query", q)
-			candidates, err := provider.search(ctx, q)
-			if err != nil {
-				if ctx.Err() != nil {
-					break lookup
-				}
-				// Transport errors may include an API key; getJSON logs safe details.
-				slog.Warn("catalog lookup failed", "provider", provider.name, "query_kind", q.Kind, "hint", "check network access and catalog settings; try again later")
-				result.Warnings = append(result.Warnings, provider.name+": lookup failed; try again later")
-				failed[provider.name] = true
-				if len(candidates) == 0 {
-					continue
-				}
-			}
-			slog.Debug("catalog lookup completed", "provider", provider.name, "query_kind", q.Kind, "candidates", len(candidates), "duration", time.Since(started))
-			for _, candidate := range candidates {
-				if strings.TrimSpace(candidate.Title) == "" || candidate.URL == "" {
-					continue
-				}
-				candidate = normalizeContributors(candidate)
-				rank := rankCandidate(request, candidate)
-				candidate.Confidence = rank.Total
-				strong[provider.name] = strong[provider.name] || (rank.Strong && specificCandidateTitle(request.Identity, candidate) != "")
-				exact[provider.name] = exact[provider.name] || (rank.ISBN && specificCandidateTitle(request.Identity, candidate) != "")
-				key := provider.name + "\x00" + candidate.URL
-				if previous, ok := found[key]; !ok || candidate.Confidence > previous.Confidence {
-					found[key] = candidate
-				}
-			}
+	return providers
+}
+
+// shouldSkipProvider stops broader retries after a provider failed or already found a strong hit.
+func shouldSkipProvider(query searchQuery, state providerSearchState) bool {
+	return state.failed || state.exact || query.Fallback && state.strong
+}
+
+// lookupProvider records provider warnings without aborting the whole catalog search.
+func (s *Service) lookupProvider(ctx context.Context, request SearchRequest, query searchQuery, provider namedProvider, state *providerSearchState, result *Result, found map[string]Candidate) {
+	started := time.Now()
+	slog.Debug("catalog lookup started", "provider", provider.name, "query", query)
+
+	candidates, err := provider.search(ctx, query)
+	if err != nil {
+		if ctx.Err() != nil || !s.recordLookupFailure(ctx, query, provider.name, len(candidates), state, result) {
+			return
 		}
 	}
 
-	// Rank after collection so limits apply across all catalogs together.
+	slog.Debug("catalog lookup completed", "provider", provider.name, "query_kind", query.Kind, "candidates", len(candidates), "duration", time.Since(started))
+
+	for _, candidate := range candidates {
+		s.addCandidate(request, provider, candidate, state, found)
+	}
+}
+
+// recordLookupFailure converts provider errors into warnings that can be shown in the UI.
+func (s *Service) recordLookupFailure(ctx context.Context, query searchQuery, provider string, count int, state *providerSearchState, result *Result) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+
+	// Transport errors may include an API key; getJSON logs safe details.
+	slog.Warn("catalog lookup failed", "provider", provider, "query_kind", query.Kind, "hint", "check network access and catalog settings; try again later")
+	result.Warnings = append(result.Warnings, provider+": lookup failed; try again later")
+	state.failed = true
+
+	return count > 0
+}
+
+// addCandidate keeps the best-scoring normalized record for each provider URL.
+func (s *Service) addCandidate(request SearchRequest, provider namedProvider, candidate Candidate, state *providerSearchState, found map[string]Candidate) {
+	if strings.TrimSpace(candidate.Title) == "" || candidate.URL == "" {
+		return
+	}
+
+	candidate = normalizeContributors(candidate)
+	rank := rankCandidate(request, candidate)
+	candidate.Confidence = rank.Total
+	hasSpecificTitle := specificCandidateTitle(request.Identity, candidate) != ""
+	state.strong = state.strong || rank.Strong && hasSpecificTitle
+	state.exact = state.exact || rank.ISBN && hasSpecificTitle
+	key := provider.name + "\x00" + candidate.URL
+
+	if previous, ok := found[key]; !ok || candidate.Confidence > previous.Confidence {
+		found[key] = candidate
+	}
+}
+
+// finalizeCandidates re-ranks, corroborates, sorts, and trims the provider results.
+func finalizeCandidates(request SearchRequest, found map[string]Candidate, limit int) []Candidate {
 	results := make([]Candidate, 0, len(found))
+
 	for _, candidate := range found {
 		rank := rankCandidate(request, candidate)
 		slog.Debug("catalog candidate ranked", "source", candidate.Source, "title", candidate.Title, "score", rank.Total, "title_similarity", rank.Title, "author_similarity", rank.Author, "isbn_match", rank.ISBN)
-		if rank.ISBN || (rank.Title >= .35 && candidate.Confidence >= .4) {
+		if rank.ISBN || rank.Title >= .35 && candidate.Confidence >= .4 {
 			results = append(results, candidate)
 		}
 	}
@@ -201,19 +269,21 @@ lookup:
 		if results[i].Confidence == results[j].Confidence {
 			return results[i].URL < results[j].URL
 		}
+
 		return results[i].Confidence > results[j].Confidence
 	})
-	if prefs.MaxCandidates < 1 {
-		prefs.MaxCandidates = 12
+
+	if limit < 1 {
+		limit = 12
 	}
 
 	corroborateCandidates(request, results)
-	if len(results) > prefs.MaxCandidates {
-		results = results[:prefs.MaxCandidates]
+
+	if len(results) > limit {
+		results = results[:limit]
 	}
 
-	result.Candidates = results
-	return result
+	return results
 }
 
 // CacheKey identifies a normalized query against a file and preference snapshot.
@@ -222,13 +292,16 @@ func CacheKey(fingerprint, query string) string {
 	return hex.EncodeToString(h[:])
 }
 
+// first returns the first string in a slice or an empty string.
 func first(values []string) string {
 	if len(values) == 0 {
 		return ""
 	}
+
 	return values[0]
 }
 
+// fieldSources marks each editable metadata field with the catalog that supplied it.
 func fieldSources(source string) map[string]string {
 	fields := make(map[string]string)
 	for _, field := range []string{
@@ -245,5 +318,6 @@ func fieldSources(source string) map[string]string {
 	} {
 		fields[field] = source
 	}
+
 	return fields
 }

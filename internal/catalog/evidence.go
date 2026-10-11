@@ -7,9 +7,11 @@ import "fmt"
 func corroborateCandidates(request SearchRequest, candidates []Candidate) {
 	for i := range candidates {
 		candidate := &candidates[i]
+
 		if specificCandidateTitle(request.Identity, *candidate) != "" {
 			continue
 		}
+
 		for _, donor := range candidates {
 			if donor.URL == candidate.URL || differentLanguage(request.Identity.Languages, donor.Language) {
 				continue
@@ -25,6 +27,7 @@ func corroborateCandidates(request SearchRequest, candidates []Candidate) {
 	}
 }
 
+// sharedISBN accepts only canonical ISBN agreement, including ISBN-10/13 equivalents.
 func sharedISBN(a, b Candidate) bool {
 	for _, left := range append([]string{a.ISBN}, a.ISBNs...) {
 		for _, right := range append([]string{b.ISBN}, b.ISBNs...) {

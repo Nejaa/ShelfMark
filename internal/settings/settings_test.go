@@ -69,18 +69,26 @@ func TestLoadDefaultsAndLegacySettings(t *testing.T) {
 		check  func(Preferences) error
 	}{
 		{name: "first launch", values: map[string]string{}, check: func(p Preferences) error {
-			if p != Defaults() { return fmt.Errorf("got %+v, want defaults %+v", p, Defaults()) }
+			if p != Defaults() {
+				return fmt.Errorf("got %+v, want defaults %+v", p, Defaults())
+			}
 			return nil
 		}},
 		{name: "legacy values", values: map[string]string{"last_folder": "/books", "google_books_api_key": "secret"}, check: func(p Preferences) error {
-			if p.LastFolder != "/books" || p.GoogleBooksAPIKey != "secret" { return fmt.Errorf("legacy fields not loaded: %+v", p) }
+			if p.LastFolder != "/books" || p.GoogleBooksAPIKey != "secret" {
+				return fmt.Errorf("legacy fields not loaded: %+v", p)
+			}
 			return nil
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got, err := Load(context.Background(), &memorySettings{values: test.values})
-			if err != nil { t.Fatalf("Load() error = %v", err) }
-			if err := test.check(got); err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if err := test.check(got); err != nil {
+				t.Fatal(err)
+			}
 		})
 	}
 }
@@ -97,10 +105,18 @@ func TestSaveValidatesAndPersistsPreferences(t *testing.T) {
 	prefs := Defaults()
 	prefs.LastFolder = "/books"
 	prefs.GoogleBooksAPIKey = "secret"
-	if err := Save(context.Background(), db, prefs); err != nil { t.Fatalf("Save() error = %v", err) }
+	if err := Save(context.Background(), db, prefs); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
 	got, err := Load(context.Background(), db)
-	if err != nil { t.Fatalf("Load() error = %v", err) }
-	if got != prefs { t.Fatalf("loaded preferences = %+v, want %+v", got, prefs) }
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got != prefs {
+		t.Fatalf("loaded preferences = %+v, want %+v", got, prefs)
+	}
 	prefs.MaxCandidates = 0
-	if err := Save(context.Background(), db, prefs); err == nil { t.Fatal("Save() accepted invalid preferences") }
+	if err := Save(context.Background(), db, prefs); err == nil {
+		t.Fatal("Save() accepted invalid preferences")
+	}
 }

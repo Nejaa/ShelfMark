@@ -32,16 +32,16 @@ available.
 
 ## Component families
 
-| Component | Licensing details |
-| --- | --- |
-| Go modules and standard library | Original MIT, BSD, Apache and other upstream texts are collected from the resolved module graph; nested notices are retained. See the generated inventory rather than treating all modules as one license. |
-| Roboto font embedded by pdfcpu | Apache-2.0; original Google copyright, trademark and license metadata are recorded in `licenses/Roboto-NOTICE.txt`. Its file hash is verified against `licenses/fonts.json`. |
-| Tesseract and English/French `tessdata_best` models | Apache-2.0; original texts and model versions are retained. |
-| Leptonica | Its upstream BSD-style license is retained. |
-| GCC/MinGW compiler runtimes | GCC license texts and runtime exception, MinGW notices and the build distribution's actual package notices are retained. |
-| Linux GTK/WebKitGTK stack and supporting tools | Mixed licenses, including LGPL/GPL, BSD/MIT and font licenses. Exact distribution notices and source packages accompany the release. These components are separate native helpers, tools and dynamically loaded libraries. |
-| Windows WebView2 loader and Fixed Version runtime | Microsoft software terms, plus the runtime's third-party notices. These components are not licensed under MIT. |
-| Debian container base and CA certificates | Distribution package notices are retained; matching package sources accompany the image archive. |
+| Component                                           | Licensing details                                                                                                                                                                                                          |
+|-----------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Go modules and standard library                     | Original MIT, BSD, Apache and other upstream texts are collected from the resolved module graph; nested notices are retained. See the generated inventory rather than treating all modules as one license.                 |
+| Roboto font embedded by pdfcpu                      | Apache-2.0; original Google copyright, trademark and license metadata are recorded in `licenses/Roboto-NOTICE.txt`. Its file hash is verified against `licenses/fonts.json`.                                               |
+| Tesseract and English/French `tessdata_best` models | Apache-2.0; original texts and model versions are retained.                                                                                                                                                                |
+| Leptonica                                           | Its upstream BSD-style license is retained.                                                                                                                                                                                |
+| GCC/MinGW compiler runtimes                         | GCC license texts and runtime exception, MinGW notices and the build distribution's actual package notices are retained.                                                                                                   |
+| Linux GTK/WebKitGTK stack and supporting tools      | Mixed licenses, including LGPL/GPL, BSD/MIT and font licenses. Exact distribution notices and source packages accompany the release. These components are separate native helpers, tools and dynamically loaded libraries. |
+| Windows WebView2 loader and Fixed Version runtime   | Microsoft software terms, plus the runtime's third-party notices. These components are not licensed under MIT.                                                                                                             |
+| Debian container base and CA certificates           | Distribution package notices are retained; matching package sources accompany the image archive.                                                                                                                           |
 
 ## Rebuilding native components
 

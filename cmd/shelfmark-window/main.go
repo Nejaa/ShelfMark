@@ -16,10 +16,12 @@ import (
 	webview "github.com/webview/webview_go"
 )
 
+// main hosts the embedded web application inside a native window and exits when the parent server disappears.
 func main() {
 	// GUI creation, event handling, and destruction must use the same OS thread.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+
 	if len(os.Args) != 2 {
 		fmt.Fprintln(os.Stderr, "expected the Shelfmark UI URL")
 		os.Exit(2)
@@ -27,6 +29,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+
 	if !canCreateWindow() {
 		fmt.Fprintln(os.Stderr, "no usable graphical display")
 		os.Exit(1)

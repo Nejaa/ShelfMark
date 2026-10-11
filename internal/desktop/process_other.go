@@ -4,6 +4,12 @@ package desktop
 
 import "os/exec"
 
-func configureProcess(cmd *exec.Cmd) {}
+// configureProcess leaves process management to os/exec on platforms with no extra requirements.
+func configureProcess(cmd *exec.Cmd) {
+	// Other platforms use os/exec's default process configuration.
+}
 
-func cleanupProcess(cmd *exec.Cmd) {}
+// cleanupProcess is a no-op on platforms without helper process-group handling.
+func cleanupProcess(cmd *exec.Cmd) {
+	// Other platforms need no extra process-group cleanup.
+}

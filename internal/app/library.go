@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -17,10 +18,12 @@ import (
 	"shelfmark/internal/settings"
 )
 
+// browse lists candidate library folders rooted at the requested directory.
 func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Path string `json:"path"`
 	}
+
 	if err := decode(r, &in); err != nil {
 		jsonError(w, err)
 		return
@@ -31,18 +34,8 @@ func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err)
 		return
 	}
-	p := in.Path
-	if p == "" && prefs.LastFolder != "" {
-		p = prefs.LastFolder
-		if info, err := os.Stat(p); err != nil || !info.IsDir() {
-			slog.Warn("saved library folder unavailable; opening home directory", "path", p)
-			p = ""
-		}
-	}
 
-	if p == "" {
-		p, _ = os.UserHomeDir()
-	}
+	p := browsePath(in.Path, prefs.LastFolder)
 
 	abs, err := filepath.Abs(filepath.Clean(p))
 	if err != nil {
@@ -67,22 +60,54 @@ func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	dirs := browseDirectories(abs, entries, prefs.IncludeHidden)
+	parent := parentPath(abs)
+
+	jsonOut(w, map[string]any{"path": abs, "parent": parent, "dirs": dirs})
+}
+
+// browsePath prefers the requested folder, then the saved one, then the home directory.
+func browsePath(requested, saved string) string {
+	path := requested
+	if path == "" && saved != "" {
+		path = saved
+		if info, err := os.Stat(path); err != nil || !info.IsDir() {
+			slog.Warn("saved library folder unavailable; opening home directory", "path", path)
+			path = ""
+		}
+	}
+
+	if path == "" {
+		path, _ = os.UserHomeDir()
+	}
+
+	return path
+}
+
+// browseDirectories applies the hidden-file setting and returns names in UI order.
+func browseDirectories(root string, entries []os.DirEntry, includeHidden bool) []map[string]string {
 	dirs := make([]map[string]string, 0)
-	for _, e := range entries {
-		if e.IsDir() && (prefs.IncludeHidden || !strings.HasPrefix(e.Name(), ".")) {
-			dirs = append(dirs, map[string]string{"name": e.Name(), "path": filepath.Join(abs, e.Name())})
+	for _, entry := range entries {
+		if entry.IsDir() && (includeHidden || !strings.HasPrefix(entry.Name(), ".")) {
+			dirs = append(dirs, map[string]string{"name": entry.Name(), "path": filepath.Join(root, entry.Name())})
 		}
 	}
 
 	sort.Slice(dirs, func(i, j int) bool {
 		return strings.ToLower(dirs[i]["name"]) < strings.ToLower(dirs[j]["name"])
 	})
-	parent := filepath.Dir(abs)
-	if parent == abs {
-		parent = ""
+
+	return dirs
+}
+
+// parentPath returns the parent folder, or empty at the filesystem root.
+func parentPath(path string) string {
+	parent := filepath.Dir(path)
+	if parent == path {
+		return ""
 	}
 
-	jsonOut(w, map[string]any{"path": abs, "parent": parent, "dirs": dirs})
+	return parent
 }
 
 // scan collects supported regular files and publishes a new index only after
@@ -92,6 +117,7 @@ func (s *Server) scan(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Root string `json:"root"`
 	}
+
 	if err := decode(r, &in); err != nil {
 		jsonError(w, err)
 		return
@@ -107,9 +133,12 @@ func (s *Server) scan(w http.ResponseWriter, r *http.Request) {
 	// lock, because the old worker may still be finishing a metadata read.
 	s.jobsMu.Lock()
 	defer s.jobsMu.Unlock()
+
 	s.stopBackgroundLocked()
+
 	s.operations.Lock()
 	defer s.operations.Unlock()
+
 	prefs, err := settings.Load(r.Context(), s.db)
 	if err != nil {
 		jsonError(w, err)
@@ -141,76 +170,116 @@ func (s *Server) scan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	supported := map[string]bool{".epub": true, ".fb2": true, ".cbz": true, ".pdf": true}
-	books := make([]book, 0)
-	warnings := make([]string, 0)
-	paths := make(map[string]string)
-	err = filepath.WalkDir(root, func(path string, e os.DirEntry, walkErr error) error {
-		if err := r.Context().Err(); err != nil {
-			return err
-		}
-
-		if walkErr != nil {
-			slog.Warn("cannot access library entry; skipping", "path", path, "error", walkErr)
-			warnings = append(warnings, fmt.Sprintf("%s: %v", path, walkErr))
-			return nil
-		}
-
-		if e.IsDir() {
-			if path != root && (!prefs.Recursive || (!prefs.IncludeHidden && strings.HasPrefix(e.Name(), "."))) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		if (!prefs.IncludeHidden && strings.HasPrefix(e.Name(), ".")) || e.Type()&os.ModeSymlink != 0 || !supported[strings.ToLower(filepath.Ext(path))] {
-			return nil
-		}
-
-		info, err := e.Info()
-		if err != nil {
-			slog.Warn("cannot inspect library file; skipping", "path", path, "error", err)
-			warnings = append(warnings, fmt.Sprintf("%s: %v", path, err))
-			return nil
-		}
-
-		slog.Debug("scanning book", "path", path)
-		fileMeta, err := metadata.Read(path)
-		if err != nil {
-			slog.Warn("book metadata unreadable; using filename", "path", path, "error", err)
-			warnings = append(warnings, fmt.Sprintf("%s: %v", path, err))
-			fileMeta = map[string]any{
-				"title":      strings.TrimSuffix(e.Name(), filepath.Ext(e.Name())),
-				"authors":    []string{},
-				"read_error": err.Error(),
-			}
-		}
-
-		fingerprint := fingerprint(path, info, fileMeta)
-		draft, staged, err := s.db.ReadBook(r.Context(), path, fingerprint, fileMeta)
-		if err != nil {
-			return err
-		}
-
-		id := idFor(path)
-		paths[id] = path
-		books = append(books, makeBook(path, draft, fileMeta, staged))
-		return nil
-	})
+	result, err := s.scanLibrary(r.Context(), root, prefs)
 	if err != nil {
 		jsonError(w, err)
 		return
 	}
 
 	s.pathsMu.Lock()
-	s.paths = paths
+	s.paths = result.paths
 	s.root = root
 	s.pathsMu.Unlock()
-	sortBooks(books)
-	slog.Info("library scan completed", "books", len(books), "warnings", len(warnings), "duration", time.Since(started))
-	view := makeLibraryView(root, root, "", books)
-	view.Warnings = warnings
+
+	sortBooks(result.books)
+	slog.Info("library scan completed", "books", len(result.books), "warnings", len(result.warnings), "duration", time.Since(started))
+
+	view := makeLibraryView(root, root, "", result.books)
+	view.Warnings = result.warnings
+
 	jsonOut(w, view)
+}
+
+// scanResult holds one scan's full replacement index before publication.
+type scanResult struct {
+	books    []book
+	warnings []string
+	paths    map[string]string
+}
+
+// scanLibrary walks the selected root and accumulates warnings without
+// publishing partial results until the traversal finishes successfully.
+func (s *Server) scanLibrary(ctx context.Context, root string, prefs settings.Preferences) (scanResult, error) {
+	result := scanResult{books: make([]book, 0), warnings: make([]string, 0), paths: make(map[string]string)}
+	supported := map[string]bool{".epub": true, ".fb2": true, ".cbz": true, ".pdf": true}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		if walkErr != nil {
+			slog.Warn("cannot access library entry; skipping", "path", path, "error", walkErr)
+			result.warnings = append(result.warnings, fmt.Sprintf("%s: %v", path, walkErr))
+			return nil
+		}
+
+		if entry.IsDir() {
+			if shouldSkipDirectory(path, root, entry.Name(), prefs) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if !supportedScanEntry(entry, path, prefs.IncludeHidden, supported) {
+			return nil
+		}
+
+		b, warning, err := s.scanBook(ctx, path, entry)
+		if warning != "" {
+			result.warnings = append(result.warnings, warning)
+		}
+
+		if err != nil {
+			return err
+		}
+
+		result.paths[idFor(path)] = path
+		result.books = append(result.books, b)
+
+		return nil
+	})
+	return result, err
+}
+
+// shouldSkipDirectory applies recursion and hidden-folder policy during scanning.
+func shouldSkipDirectory(path, root, name string, prefs settings.Preferences) bool {
+	return path != root && (!prefs.Recursive || (!prefs.IncludeHidden && strings.HasPrefix(name, ".")))
+}
+
+// supportedScanEntry filters regular, non-symlinked files to the supported formats.
+func supportedScanEntry(entry os.DirEntry, path string, includeHidden bool, supported map[string]bool) bool {
+	return (includeHidden || !strings.HasPrefix(entry.Name(), ".")) && entry.Type()&os.ModeSymlink == 0 && supported[strings.ToLower(filepath.Ext(path))]
+}
+
+// scanBook reads file metadata and overlays any stored draft for that path.
+func (s *Server) scanBook(ctx context.Context, path string, entry os.DirEntry) (book, string, error) {
+	info, err := entry.Info()
+	if err != nil {
+		slog.Warn("cannot inspect library file; skipping", "path", path, "error", err)
+		return book{}, fmt.Sprintf("%s: %v", path, err), nil
+	}
+
+	slog.Debug("scanning book", "path", path)
+
+	fileMeta, err := metadata.Read(path)
+	warning := ""
+	if err != nil {
+		slog.Warn("book metadata unreadable; using filename", "path", path, "error", err)
+		warning = fmt.Sprintf("%s: %v", path, err)
+		fileMeta = map[string]any{
+			"title":      strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name())),
+			"authors":    []string{},
+			"read_error": err.Error(),
+		}
+	}
+
+	fp := fingerprint(path, info, fileMeta)
+	draft, staged, err := s.db.ReadBook(ctx, path, fp, fileMeta)
+	if err != nil {
+		return book{}, warning, err
+	}
+
+	return makeBook(path, draft, fileMeta, staged), warning, nil
 }
 
 // fingerprint detects file or metadata changes between review and save.
@@ -226,10 +295,12 @@ func idFor(path string) string {
 	return hex.EncodeToString(sum[:12])
 }
 
+// cover returns the current cover image for one scanned book.
 func (s *Server) cover(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		ID string `json:"id"`
 	}
+
 	if err := decode(r, &in); err != nil {
 		jsonError(w, err)
 		return
@@ -252,6 +323,7 @@ func (s *Server) cover(w http.ResponseWriter, r *http.Request) {
 	jsonOut(w, map[string]string{"cover": value})
 }
 
+// lookupPath resolves an opaque API book ID to the current scan path.
 func (s *Server) lookupPath(id string) string {
 	s.pathsMu.RLock()
 	defer s.pathsMu.RUnlock()

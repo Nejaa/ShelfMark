@@ -26,48 +26,67 @@ func ISBNs(value string) []string {
 	var out []string
 	for _, match := range isbnPattern.FindAllStringSubmatch(value, -1) {
 		candidate := strings.ToUpper(cleanISBN.ReplaceAllString(match[1], ""))
-		valid := false
 		if strings.Contains(candidate[:len(candidate)-1], "X") {
 			continue
 		}
 
-		switch len(candidate) {
-		case 10:
-			sum := 0
-			for i, r := range candidate {
-				n := 0
-				if r == 'X' {
-					if i != 9 {
-						continue
-					}
-					n = 10
-				} else {
-					n = int(r - '0')
-				}
-				sum += (10 - i) * n
-			}
-			valid = sum%11 == 0
-		case 13:
-			if strings.HasPrefix(candidate, "978") || strings.HasPrefix(candidate, "979") {
-				sum := 0
-				for i, r := range candidate[:12] {
-					n := int(r - '0')
-					if i%2 == 1 {
-						n *= 3
-					}
-					sum += n
-				}
-				valid = (10-sum%10)%10 == int(candidate[12]-'0')
-			}
-		}
-
-		if valid && !seen[candidate] {
+		if validISBN(candidate) && !seen[candidate] {
 			seen[candidate] = true
 			out = append(out, candidate)
 		}
 	}
 
 	return out
+}
+
+// validISBN dispatches to the checksum used by the candidate length.
+func validISBN(candidate string) bool {
+	switch len(candidate) {
+	case 10:
+		return validISBN10(candidate)
+	case 13:
+		return validISBN13(candidate)
+	}
+
+	return false
+}
+
+// validISBN10 verifies the weighted mod-11 checksum, including a terminal X.
+func validISBN10(candidate string) bool {
+	sum := 0
+	for i, r := range candidate {
+		n := int(r - '0')
+		if r == 'X' {
+			if i != 9 {
+				continue
+			}
+
+			n = 10
+		}
+
+		sum += (10 - i) * n
+	}
+
+	return sum%11 == 0
+}
+
+// validISBN13 verifies the alternating 1/3 weighted checksum used by EAN-13 ISBNs.
+func validISBN13(candidate string) bool {
+	if !strings.HasPrefix(candidate, "978") && !strings.HasPrefix(candidate, "979") {
+		return false
+	}
+
+	sum := 0
+	for i, r := range candidate[:12] {
+		n := int(r - '0')
+		if i%2 == 1 {
+			n *= 3
+		}
+
+		sum += n
+	}
+
+	return (10-sum%10)%10 == int(candidate[12]-'0')
 }
 
 // decodeISBN reads an EAN-13 barcode after bounding image size and pixel count.

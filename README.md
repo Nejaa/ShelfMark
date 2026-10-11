@@ -78,10 +78,10 @@ include checksums, license notices, and source archives.
 Release executables are available for Linux x64 and Windows x64. Go, Python, a
 C/C++ compiler, and a separate SQLite installation are not required.
 
-| System | Requirements |
-| --- | --- |
-| Linux x64 | 64-bit Linux. Bundled desktop and OCR helpers require glibc 2.36 or newer. Desktop mode requires X11 or Wayland and kernel support for WebKit's sandbox. |
-| Windows x64 | Windows 10/11 or a compatible Windows Server version. Desktop mode requires a graphical session; the release includes WebView2. |
+| System      | Requirements                                                                                                                                             |
+|-------------|----------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Linux x64   | 64-bit Linux. Bundled desktop and OCR helpers require glibc 2.36 or newer. Desktop mode requires X11 or Wayland and kernel support for WebKit's sandbox. |
+| Windows x64 | Windows 10/11 or a compatible Windows Server version. Desktop mode requires a graphical session; the release includes WebView2.                          |
 
 Shelfmark needs permission to read the library and a writable data directory.
 Saving metadata also requires write access to book files and their folders.
@@ -94,12 +94,12 @@ cover downloads, but not for scanning or editing local books.
 
 ### Command-line options
 
-| Flag | Default | Purpose |
-| --- | --- | --- |
-| `-headless` | `false` | Serve HTTP without attempting a desktop window |
-| `-listen` | `127.0.0.1:8766` | HTTP listen address |
+| Flag         | Default                                | Purpose                                                            |
+|--------------|----------------------------------------|--------------------------------------------------------------------|
+| `-headless`  | `false`                                | Serve HTTP without attempting a desktop window                     |
+| `-listen`    | `127.0.0.1:8766`                       | HTTP listen address                                                |
 | `-log-level` | Saved setting (`info` on first launch) | Override the initial severity: `debug`, `info`, `warn`, or `error` |
-| `-data-dir` | Directory containing the executable | SQLite storage directory |
+| `-data-dir`  | Directory containing the executable    | SQLite storage directory                                           |
 
 To access the interface from another device on a trusted network:
 
@@ -171,12 +171,12 @@ the application does not provide authentication. Stop it with `docker stop shelf
 Settings are stored on the server. Changes affect future operations; scanning
 preferences take effect on the next scan.
 
-| Category | Controls |
-| --- | --- |
-| Library | Last folder, recursive scanning, hidden files and folders |
+| Category | Controls                                                                                            |
+|----------|-----------------------------------------------------------------------------------------------------|
+| Library  | Last folder, recursive scanning, hidden files and folders                                           |
 | Catalogs | Enable Google Books, Open Library, and Internet Archive individually; optional Google Books API key |
 | Matching | Local content inspection, optional OCR, maximum candidates, cache duration, background search delay |
-| Logging | Minimum severity (debug, info, warning, error), applied immediately when saved |
+| Logging  | Minimum severity (debug, info, warning, error), applied immediately when saved                      |
 
 Catalog searches use search terms and discovered ISBNs. Book text is inspected
 locally and is not uploaded. OCR searches opening images in EPUB and CBZ files;
@@ -184,7 +184,7 @@ PDF matching reads its text layer. Release executables include English and
 French OCR models. Custom search terms bypass local content inspection.
 
 Cached results appear when a book is selected. Use **Find matches** to search
-catalogs, or **Ignore cache** to run a fresh search. Cache duration and size are
+catalogs, or **Ignore cache** to run a fresh search. Cache duration is
 configurable. Catalog results can describe a different edition; Open Library
 results may describe a work rather than a specific edition.
 
@@ -194,12 +194,12 @@ settings.
 
 ## Files and data
 
-| Format | Metadata storage | Cover replacement |
-| --- | --- | --- |
-| EPUB | Package metadata, including additional Calibre properties | Supported |
-| FB2 | Description metadata and additional Shelfmark properties | Not supported |
-| CBZ | `ComicInfo.xml` | Not supported; archive pages remain intact |
-| PDF | Document properties | Not supported |
+| Format | Metadata storage                                          | Cover replacement                          |
+|--------|-----------------------------------------------------------|--------------------------------------------|
+| EPUB   | Package metadata, including additional Calibre properties | Supported                                  |
+| FB2    | Description metadata and additional Shelfmark properties  | Not supported                              |
+| CBZ    | `ComicInfo.xml`                                           | Not supported; archive pages remain intact |
+| PDF    | Document properties                                       | Not supported                              |
 
 Additional properties may not be displayed by every ebook reader. FB2 supports
 one language field. DRM-protected, encrypted, or malformed books may not be

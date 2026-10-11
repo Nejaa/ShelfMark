@@ -37,6 +37,7 @@ func configureLogging(programDir string, console io.Writer) (func(), error) {
 	if console != nil {
 		output = io.MultiWriter(file, console)
 	}
+
 	// The helper writes raw native diagnostics while the server logs messages.
 	// Serialize both paths so individual writes stay together in every sink.
 	diagnosticOutput = &lockedWriter{output: output}
@@ -55,6 +56,7 @@ func configureLogging(programDir string, console io.Writer) (func(), error) {
 	}, nil
 }
 
+// lockedWriter keeps concurrent log lines and helper diagnostics from interleaving.
 type lockedWriter struct {
 	mu     sync.Mutex
 	output io.Writer
