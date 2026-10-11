@@ -37,30 +37,52 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	jsonOut(w, result)
 }
 
+// cachedSearch loads suggestions on selection without scheduling a catalog
+// request or running content inspection. A miss leaves explicit search to the user.
+func (s *Server) cachedSearch(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		ID string `json:"id"`
+	}
+	if err := decode(r, &in); err != nil {
+		jsonError(w, err)
+		return
+	}
+	result, err := s.findMatches(r.Context(), in.ID, nil, lookupOptions{CacheOnly: true})
+	if err != nil {
+		jsonError(w, err)
+		return
+	}
+	jsonOut(w, result)
+}
+
 // lookupOptions controls scheduling and cache reuse for one search action.
 type lookupOptions struct {
 	Background  bool
 	IgnoreCache bool
+	CacheOnly   bool
 }
 
 // findMatches is shared by explicit lookups and the server-owned background job.
 // A nil query asks the backend to derive terms from the current working metadata.
 func (s *Server) findMatches(ctx context.Context, id string, query *string, options lookupOptions) (catalog.Result, error) {
 	background := options.Background
-	if !background {
+	if !background && !options.CacheOnly {
 		s.manualSearches.Add(1)
 		defer s.manualSearches.Add(-1)
 	}
 	if query != nil && strings.TrimSpace(*query) == "" {
 		return catalog.Result{}, errors.New("enter a title, author or ISBN")
 	}
-	select {
-	case s.searches <- struct{}{}:
-		defer func() {
-			<-s.searches
-		}()
-	case <-ctx.Done():
-		return catalog.Result{}, ctx.Err()
+	// Reading cached matches must not wait behind a background catalog request.
+	if !options.CacheOnly {
+		select {
+		case s.searches <- struct{}{}:
+			defer func() {
+				<-s.searches
+			}()
+		case <-ctx.Done():
+			return catalog.Result{}, ctx.Err()
+		}
 	}
 
 	path := s.lookupPath(id)
@@ -73,8 +95,15 @@ func (s *Server) findMatches(ctx context.Context, id string, query *string, opti
 		return catalog.Result{}, err
 	}
 
-	slog.Info("metadata search started", "book_id", id, "background", background, "ignore_cache", options.IgnoreCache)
+	if options.CacheOnly {
+		slog.Debug("loading cached matches for book selection", "book_id", id)
+	} else {
+		slog.Info("metadata search started", "book_id", id, "background", background, "ignore_cache", options.IgnoreCache)
+	}
 	if !prefs.GoogleBooks && !prefs.OpenLibrary && !prefs.InternetArchive {
+		if options.CacheOnly {
+			return catalog.Result{Candidates: []catalog.Candidate{}}, nil
+		}
 		slog.Warn("metadata search unavailable: no catalogs enabled", "hint", "enable at least one catalog in Settings")
 		return catalog.Result{
 			Candidates: []catalog.Candidate{},
@@ -110,17 +139,25 @@ func (s *Server) findMatches(ctx context.Context, id string, query *string, opti
 	}{catalogOptions, prefs.InspectContent, prefs.OCR, current, identity, query != nil})
 	key := catalog.CacheKey(fp+string(encoded), terms)
 	// Bypassing cache reads still allows a successful fresh search to replace
-	// the old entry. Failures retain the existing cache and are never cached.
+	// the old entry. Useful partial results retain their provider warnings; a
+	// failed search with no candidates must not replace an existing entry.
 	if options.IgnoreCache {
 		slog.Debug("search cache bypassed by request", "book_id", id)
 	} else {
 		var cached catalog.Result
 		ok, err := s.db.CacheGet(ctx, key, time.Duration(prefs.CacheDays)*24*time.Hour, &cached)
 		if err != nil {
+			if options.CacheOnly {
+				slog.Warn("could not load cached catalog matches", "book_id", id, "error", err)
+				return catalog.Result{}, err
+			}
 			slog.Warn("search cache read failed; querying catalogs", "error", err)
 		}
 		if ok && err == nil {
 			slog.Debug("search cache hit", "book_id", id, "candidates", len(cached.Candidates))
+			if options.CacheOnly {
+				return cached, nil
+			}
 			// Empty results avoid repeated background work, but an explicit lookup
 			// must retry content inspection and all enabled catalogs for new matches.
 			if background || len(cached.Candidates) > 0 {
@@ -131,6 +168,9 @@ func (s *Server) findMatches(ctx context.Context, id string, query *string, opti
 		} else {
 			slog.Debug("search cache miss or disabled", "book_id", id)
 		}
+	}
+	if options.CacheOnly {
+		return catalog.Result{Candidates: []catalog.Candidate{}}, nil
 	}
 	// Indexed content is read locally. It is never submitted to a catalog service.
 	clues := ""
@@ -156,9 +196,11 @@ func (s *Server) findMatches(ctx context.Context, id string, query *string, opti
 	results := s.catalog.Search(ctx, catalog.SearchRequest{
 		Query: terms, CustomQuery: query != nil, Identity: identity, ISBNs: isbns, Background: background,
 	}, catalogOptions)
-	if len(results.Warnings) == 0 && ctx.Err() == nil && prefs.CacheDays > 0 {
+	if (len(results.Candidates) > 0 || len(results.Warnings) == 0) && ctx.Err() == nil && prefs.CacheDays > 0 {
 		if err := s.db.CachePut(ctx, key, results); err != nil {
 			slog.Warn("could not cache search results", "error", err)
+		} else {
+			slog.Debug("catalog results cached", "book_id", id, "candidates", len(results.Candidates), "warnings", len(results.Warnings))
 		}
 	}
 

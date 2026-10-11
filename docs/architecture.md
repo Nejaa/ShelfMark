@@ -119,7 +119,8 @@ ISBNs available for matching and a note about edition ambiguity.
 ISBN lookups also fetch Open Library edition JSON; the work record supplies
 fallback author names, while the edition supplies its actual title, subtitle,
 languages, series labels, publisher and date. Missing edition records are normal;
-transport failures remain warnings and partial results are not cached. Explicit
+transport failures remain warnings; useful partial results are cached, while
+failed searches with no candidates are not. Explicit
 contributor roles and labelled translation statements provide translator evidence.
 EPUB readers recognize inline and refined contributor roles, and writes preserve
 unselected roles.

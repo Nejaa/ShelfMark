@@ -1,6 +1,8 @@
 package library
 
 import (
+	"bytes"
+	"encoding/csv"
 	"fmt"
 	"strings"
 )
@@ -23,6 +25,29 @@ func Text(value any) string {
 	default:
 		return fmt.Sprint(v)
 	}
+}
+
+// InputText encodes list values as CSV so values containing commas or quotes
+// remain one metadata item when submitted from the editor.
+func InputText(name string, value any) (string, error) {
+	list, known := Field(name)
+	if !known || !list {
+		return Text(value), nil
+	}
+	values := Strings(value)
+	if len(values) == 0 {
+		return "", nil
+	}
+	var buffer bytes.Buffer
+	writer := csv.NewWriter(&buffer)
+	if err := writer.Write(values); err != nil {
+		return "", err
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(buffer.String(), "\n"), nil
 }
 
 // DisplayTitle falls back to the file name when metadata has no usable title.
@@ -67,10 +92,19 @@ func ParseInputs(values map[string]string) (map[string]any, error) {
 			result[name] = value
 			continue
 		}
+		reader := csv.NewReader(strings.NewReader(strings.TrimSpace(value)))
+		reader.FieldsPerRecord = -1
+		reader.TrimLeadingSpace = true
+		records, err := reader.ReadAll()
+		if err != nil {
+			return nil, fmt.Errorf("%s must be valid comma-separated text: %w", name, err)
+		}
 		items := make([]string, 0)
-		for _, item := range strings.Split(value, ",") {
-			if item = strings.TrimSpace(item); item != "" {
-				items = append(items, item)
+		for _, record := range records {
+			for _, item := range record {
+				if item = strings.TrimSpace(item); item != "" {
+					items = append(items, item)
+				}
 			}
 		}
 		result[name] = items

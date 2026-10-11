@@ -3,12 +3,14 @@ package library
 import (
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
 var (
 	numberedLabel     = regexp.MustCompile(`(?i)^(.+?)\s+(?:[-:]\s*)?(?:t(?:ome)?|vol(?:ume)?\.?|book|livre|#)\s*([0-9]+(?:[.,][0-9]+)?)\s*(?:[-:–—]\s*)?(.*)$`)
 	bareNumberedLabel = regexp.MustCompile(`^(.+?)\s+(?:[-:#]+\s*)?([0-9]+(?:[.,][0-9]+)?)(?:\s*[-:–—]\s*(.*))?$`)
+	filenameVolume    = regexp.MustCompile(`^[0-9]{1,3}(?:[.,][0-9]+)?$`)
 )
 
 // BookLabel separates explicitly numbered series labels from actual titles.
@@ -50,6 +52,9 @@ func seriesKey(value string) string {
 
 // FilenameBookLabel extracts a possible series/volume/title from the filename.
 // Known author segments are excluded before classifying the remaining label.
+// A separate numeric segment between series and title is a reviewable volume
+// clue even without existing series metadata. Bare numbers in titles remain
+// untouched, and four-digit years are not treated as volume numbers.
 func FilenameBookLabel(filename string, identity SearchIdentity) BookLabel {
 	filename = strings.TrimSuffix(filename, filepath.Ext(filename))
 	filename = strings.NewReplacer("_", " ", " – ", " - ", " — ", " - ").Replace(filename)
@@ -64,5 +69,14 @@ func FilenameBookLabel(filename string, identity SearchIdentity) BookLabel {
 		filename = strings.Join(remaining, " - ")
 	}
 	filename = fileNoise.ReplaceAllString(filename, " ")
+	parts := strings.Split(filename, " - ")
+	if len(parts) >= 3 && filenameVolume.MatchString(strings.TrimSpace(parts[1])) {
+		series := strings.TrimSpace(parts[0])
+		title := strings.TrimSpace(strings.Join(parts[2:], " - "))
+		if series != "" && title != "" {
+			volume, _ := strconv.ParseFloat(strings.ReplaceAll(strings.TrimSpace(parts[1]), ",", "."), 64)
+			return BookLabel{Title: title, Series: series, Volume: strconv.FormatFloat(volume, 'f', -1, 64)}
+		}
+	}
 	return ClassifyBookLabel(filename, identity.Series)
 }

@@ -78,6 +78,14 @@ itself on the destination machine.
 The Go toolchain is specified in [go.mod](go.mod) and the container build toolchain
 in [Dockerfile](Dockerfile). Keep them compatible when updating either one.
 
+Release inputs pin Go modules and bundled OCR/WebView2 assets by version and
+checksum. The Go container image is selected by version tag, while Debian package
+repositories are live and package installation includes current upgrades. Thus a
+rebuild uses the same source-level dependencies but may resolve different base
+image and native system package revisions; release artifacts are not guaranteed
+to be bit-for-bit reproducible. This intentionally favors current Debian security
+updates over snapshot-based repeatability.
+
 Release source collection must resolve the exact dependency versions used in the
 build. Missing sources stop publication rather than substituting a different
 version. Preserve the source and notice downloads alongside published binaries;

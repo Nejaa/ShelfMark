@@ -100,6 +100,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/background", s.backgroundStatus)
 	mux.HandleFunc("POST /api/cover", s.cover)
 	mux.HandleFunc("POST /api/search", s.search)
+	mux.HandleFunc("POST /api/search/cached", s.cachedSearch)
 	mux.HandleFunc("POST /api/ui-error", s.uiError)
 	mux.HandleFunc("POST /api/apply", s.apply)
 	mux.HandleFunc("POST /api/staged-count", s.stagedCount)

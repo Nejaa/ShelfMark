@@ -182,6 +182,8 @@ queryElement('#cancelPicker').onclick = () => closeDialog(queryElement('#picker'
 async function select(b) {
     const generation = ++selectionGeneration;
     searchController?.abort();
+    searchController = new AbortController();
+    const signal = searchController.signal;
     active = b;
     candidates = [];
     chosen = -1;
@@ -191,11 +193,30 @@ async function select(b) {
     queryElement('#search').onclick = search;
     queryElement('#query').addEventListener('keydown', event => { if (event.key === 'Enter') search(); });
     void renderCompare();
+    void loadCachedMatches(b, generation, signal);
     try {
         const d = await api('/api/cover', {id: b.id});
         if (generation !== selectionGeneration) return;
         if (d.cover) queryElement('#coverbox').innerHTML = `<img class="cover" src="${esc(d.cover)}" alt="Current cover">`
     } catch {
+    }
+}
+
+async function loadCachedMatches(book, generation, signal) {
+    try {
+        const result = await api('/api/search/cached', {id: book.id}, signal);
+        // A later selection or explicit search owns the UI once it aborts this
+        // request. Also leave edited search terms alone while the cache loads.
+        if (signal.aborted || generation !== selectionGeneration ||
+            queryElement('#query')?.value !== book.search_query || queryElement('#ignoreCache')?.checked) return;
+        candidates = result.candidates || [];
+        if (candidates.length) {
+            renderMatches();
+            if (result.warnings?.length) queryElement('#matches').insertAdjacentHTML('afterbegin', `<p class="warning">Previous search: ${esc(result.warnings.join('; '))}</p>`);
+        }
+    } catch (error) {
+        if (signal.aborted || generation !== selectionGeneration) return;
+        queryElement('#matches').innerHTML = `<p class="warning">Could not load cached matches: ${esc(error.message)}. Use Find matches to search again.</p>`;
     }
 }
 
